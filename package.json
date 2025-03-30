@@ -1,0 +1,16 @@
+{
+  "name": "pdf_lib",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "gm": "^1.25.1",
+    "pdf-lib": "^1.17.1"
+  }
+}
