@@ -26,7 +26,7 @@ export class TKDForm {
       borderWidth: 0,
     });
   }
-
+  //  this method is to block out flood an area so it can't be seen on the form.
   createAllBlocks() {
     this.createBlock("Korean Info Block", this.koreanInfoBlock);
     this.createBlock("Test Count", this.testCountBlock);
@@ -40,5 +40,22 @@ export class TKDForm {
       "Certificate Block Body Right",
       this.certificateBodyRightBlock
     );
+  }
+
+  drawRows(page, rowArr, size = 14) {
+    for (let rowIndex = 0; rowIndex < rowArr.length; rowIndex++) {
+      const row = rowArr[rowIndex];
+      row.forEach((optionFunction, textIndex) => {
+        const options = optionFunction(); // Call the function to get the object
+        const adjustedX = options.x + textIndex * 24;
+        const adjustedY = options.y - rowIndex * 21;
+        page.drawText(options.text, {
+          x: adjustedX,
+          y: adjustedY,
+          font: options.font,
+          size: options.size,
+        });
+      });
+    }
   }
 }
