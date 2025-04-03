@@ -4,7 +4,6 @@ Current tech: pdf-lib, ImageMagick
 
 PDF Lib -> https://github.com/Hopding/pdf-lib/blob/b8a44bd24b74f4f32456e9809dc4d2d9dc9bf176/src/api/form/PDFTextField.ts#L49
 
-
 Current findings/rumblings:
 
 PSD -> PDF Conversion 
