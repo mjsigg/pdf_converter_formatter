@@ -1,6 +1,24 @@
 export class Student {
   static ranks = {
+    "8D": ["Yellow Stripe", "급"],
+    "7D": ["Yellow", "급"],
+    "6D": ["Orange", "급"],
+    "5D": ["Green", "급"],
     "4D": ["Purple", "급"],
+    "3D": ["Blue", "급"],
+    "2D": ["Brown", "급"],
+    "1D": ["Red", "급"],
+  };
+
+  static lilDragonRanks = {
+    "8R": ["Yellow Stripe", "급"],
+    "7R": ["Yellow Stripe", "급"],
+    "6R": ["Orange Stripe", "급"],
+    "5R": ["Green Stripe", "급"],
+    "4R": ["Purple Stripe", "급"],
+    "3R": ["Blue Stripe", "급"],
+    "2R": ["Brown Stripe", "급"],
+    "1R": ["Red Stripe", "급"],
   };
 
   static monthToKorean = {
@@ -53,6 +71,8 @@ export class Student {
   };
 
   static yearInKorean = "년";
+  static monthInKorean = "월";
+  static dayInKorean = "일";
 
   constructor(fName, mName = "", lName, birthDay, numberDan) {
     (this.fName = fName),
@@ -95,23 +115,26 @@ export class Student {
   generateKoreanInfoBlockValues(
     koreanInfoBlockXPos,
     koreanInfoBlockYPos,
-    helveticaFont,
-    koreanFont
+    latinFont,
+    koreanFont,
+    size
   ) {
     const koreanInfoFirstRow = [
       () =>
         this.createTextOptions(
           this.numberDan,
-          helveticaFont,
+          latinFont,
           koreanInfoBlockXPos,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
       () =>
         this.createTextOptions(
           this.koreanRank,
           koreanFont,
           koreanInfoBlockXPos,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
     ];
 
@@ -121,7 +144,8 @@ export class Student {
           this.fullNameInKorean || "마이클   시그",
           koreanFont,
           koreanInfoBlockXPos,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
     ];
 
@@ -129,44 +153,50 @@ export class Student {
       () =>
         this.createTextOptions(
           new Date().getFullYear().toString(),
-          helveticaFont,
+          latinFont,
           koreanInfoBlockXPos,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
       () =>
         this.createTextOptions(
-          this.yearInKorean || "년",
+          Student.yearInKorean,
           koreanFont,
           koreanInfoBlockXPos + 20,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
       () =>
         this.createTextOptions(
           (new Date().getMonth() + 1).toString(), // months are zero indexed
-          helveticaFont,
+          latinFont,
           koreanInfoBlockXPos + 23,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
       () =>
         this.createTextOptions(
-          Student.monthToKorean[(new Date().getMonth() + 1).toString()],
+          Student.monthInKorean,
           koreanFont,
           koreanInfoBlockXPos + 25,
-          koreanInfoBlockYPos
+          koreanInfoBlockYPos,
+          size
         ),
       () =>
         this.createTextOptions(
           new Date().getDate().toString(), // days are not 0 indexed
-          helveticaFont,
-          koreanInfoBlockXPos + 40,
-          koreanInfoBlockYPos
+          latinFont,
+          koreanInfoBlockXPos + 25,
+          koreanInfoBlockYPos,
+          size
         ),
       () =>
         this.createTextOptions(
-          Student.daysToKorean[new Date().getDate()],
+          Student.dayInKorean,
           koreanFont,
-          koreanInfoBlockXPos + 40,
-          koreanInfoBlockYPos
+          koreanInfoBlockXPos + 25,
+          koreanInfoBlockYPos,
+          size
         ),
     ];
 
@@ -177,17 +207,19 @@ export class Student {
     testCountXPos,
     testCountYPos,
     classCount,
-    helveticaFont,
-    koreanFont
+    latinFont,
+    koreanFont,
+    size
   ) {
     return [
       [
         () =>
           this.createTextOptions(
             String(classCount),
-            helveticaFont,
+            latinFont,
             testCountXPos + 8,
-            testCountYPos + 6.8
+            testCountYPos + 6.8,
+            size
           ),
       ],
     ];
@@ -197,18 +229,16 @@ export class Student {
     testDateXPos,
     testDateYPos,
     testDate, // this will need to be supplied in the end
-    helveticaFont,
+    latinFont,
     koreanFont,
-    size = 14
+    size
   ) {
-    // need to probably do something like a split.  YEAR koreanYear  numMonth koreanMonth  numDay koreanDay
-    // use current day as placeholder
     return [
       [
         () =>
           this.createTextOptions(
             new Date().getFullYear().toString(),
-            helveticaFont,
+            koreanFont,
             testDateXPos,
             testDateYPos,
             size
@@ -231,7 +261,7 @@ export class Student {
           ),
         () =>
           this.createTextOptions(
-            Student.monthToKorean[new Date().getMonth() + 1],
+            Student.monthInKorean,
             koreanFont,
             testDateXPos + 40,
             testDateYPos,
@@ -241,15 +271,15 @@ export class Student {
           this.createTextOptions(
             new Date().getDate().toString(),
             koreanFont,
-            testDateXPos + 70,
+            testDateXPos + 50,
             testDateYPos,
             size
           ),
         () =>
           this.createTextOptions(
-            Student.daysToKorean[new Date().getDate()],
+            Student.dayInKorean,
             koreanFont,
-            testDateXPos + 70,
+            testDateXPos + 50,
             testDateYPos,
             size
           ),
@@ -260,8 +290,9 @@ export class Student {
   generateCertificateBlock(
     certificateXPos,
     certificateYPos,
-    helveticaFont,
-    koreanFont
+    latinFont,
+    koreanFont,
+    size
   ) {
     const takewondoRow = [
       () =>
@@ -269,7 +300,8 @@ export class Student {
           `${this.numberDan} ${this.beltColor} Belt`,
           koreanFont,
           certificateXPos,
-          certificateYPos
+          certificateYPos,
+          size
         ),
     ];
 
@@ -277,9 +309,10 @@ export class Student {
       () =>
         this.createTextOptions(
           this.getFullName(),
-          helveticaFont,
+          latinFont,
           certificateXPos,
-          certificateYPos
+          certificateYPos,
+          size
         ),
     ];
 
@@ -287,9 +320,10 @@ export class Student {
       () =>
         this.createTextOptions(
           this.parseBday(),
-          helveticaFont,
+          latinFont,
           certificateXPos,
-          certificateYPos
+          certificateYPos,
+          size
         ),
     ];
 
@@ -299,18 +333,19 @@ export class Student {
   generateCertificateBodyLeft(
     certificateBodyLeftXPos,
     certificateBodyLeftYPos,
-    helveticaFont,
-    koreanFont
+    latinFont,
+    koreanFont,
+    size
   ) {
     return [
       [
         () =>
           this.createTextOptions(
             this.numberDan,
-            helveticaFont,
+            latinFont,
             certificateBodyLeftXPos,
             certificateBodyLeftYPos,
-            16
+            size
           ),
       ],
     ];
@@ -320,18 +355,19 @@ export class Student {
     certificateBodyRightXPos,
     certificateBodyRightYPos,
     classCount,
-    helveticaFont,
-    koreanFont
+    latinFont,
+    koreanFont,
+    size
   ) {
     return [
       [
         () =>
           this.createTextOptions(
             classCount.toString(),
-            helveticaFont,
+            latinFont,
             certificateBodyRightXPos + 10,
             certificateBodyRightYPos + 1,
-            16
+            size
           ),
       ],
     ];

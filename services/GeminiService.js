@@ -10,9 +10,12 @@ const credentialsPath = path.join(__dirname, GCP_CRED);
 const fileContent = await fs.readFile(credentialsPath, "utf8");
 const credentials = JSON.parse(fileContent);
 
+const { project_id } = credentials;
+if (!project_id || project_id.length === 0)
+  throw new Error("project_id field is empty.");
+
 /**
  * Asynchronously retrieves specified properties from the Google Cloud credentials JSON file.
- *
  * @async
  * @param {string[]} options An array of keys representing the properties to retrieve from the credentials file.
  * @returns {Promise<object>} A Promise that resolves to an object containing the requested properties from the credentials file.

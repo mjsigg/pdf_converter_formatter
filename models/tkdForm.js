@@ -3,15 +3,15 @@ export class TKDForm {
     this.form = form;
     this.firstPage = firstPage;
 
-    this.koreanInfoBlock = { x: 259, y: 520, width: 240, height: 78 };
+    this.koreanInfoBlock = { x: 259, y: 522, width: 240, height: 76 };
     this.testCountBlock = { x: 440, y: 500, width: 40, height: 17 };
-    this.testDateBlock = { x: 215, y: 440, width: 240, height: 27 };
-    this.certificateBlock = { x: 240, y: 248, width: 250, height: 65.5 };
+    this.testDateBlock = { x: 240, y: 440, width: 240, height: 25 };
+    this.certificateBlock = { x: 240, y: 249, width: 250, height: 68 };
     this.certificateBodyLeftBlock = { x: 228, y: 187, width: 40, height: 18 };
     this.certificateBodyRightBlock = {
-      x: this.certificateBodyLeftBlock.x + 190,
+      x: this.certificateBodyLeftBlock.x + 195,
       y: this.certificateBodyLeftBlock.y,
-      width: this.certificateBodyLeftBlock.width,
+      width: this.certificateBodyLeftBlock.width + 20,
       height: this.certificateBodyLeftBlock.height,
     };
   }
