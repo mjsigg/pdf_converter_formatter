@@ -1,103 +1,90 @@
 export class Student {
   static ranks = {
-    "8D": ["Yellow Stripe", "급"],
-    "7D": ["Yellow", "급"],
-    "6D": ["Orange", "급"],
-    "5D": ["Green", "급"],
-    "4D": ["Purple", "급"],
-    "3D": ["Blue", "급"],
-    "2D": ["Brown", "급"],
-    "1D": ["Red", "급"],
+    "yellow stripe": "8D",
+    yellow: "7D",
+    orange: "6D",
+    green: "5D",
+    purple: "4D",
+    blue: "3D",
+    brown: "2D",
+    red: "1D",
+    "recommended black belt level 1": "Recommended Black Belt Level 1",
   };
 
   static lilDragonRanks = {
-    "8R": ["Yellow Stripe", "급"],
-    "7R": ["Yellow Stripe", "급"],
-    "6R": ["Orange Stripe", "급"],
-    "5R": ["Green Stripe", "급"],
-    "4R": ["Purple Stripe", "급"],
-    "3R": ["Blue Stripe", "급"],
-    "2R": ["Brown Stripe", "급"],
-    "1R": ["Red Stripe", "급"],
-  };
-
-  static monthToKorean = {
-    1: "일월",
-    2: "이월",
-    3: "삼월",
-    4: "사월",
-    5: "오월",
-    6: "유월",
-    7: "칠월",
-    8: "팔월",
-    9: "구월",
-    10: "시월",
-    11: "십일월",
-    12: "십이월",
-  };
-
-  static daysToKorean = {
-    1: "일",
-    2: "이",
-    3: "삼",
-    4: "사",
-    5: "오",
-    6: "육",
-    7: "칠",
-    8: "팔",
-    9: "구",
-    10: "십",
-    11: "십일",
-    12: "십이",
-    13: "십삼",
-    14: "십사",
-    15: "십오",
-    16: "십육",
-    17: "십칠",
-    18: "십팔",
-    19: "십구",
-    20: "이십",
-    21: "이십일",
-    22: "이십이",
-    23: "이십삼",
-    24: "이십사",
-    25: "이십오",
-    26: "이십육",
-    27: "이십칠",
-    28: "이십팔",
-    29: "이십구",
-    30: "삼십",
-    31: "삼십일",
+    "yellow stripe": "8R",
+    yellow: "7R",
+    "orange stripe": "6R",
+    "green stripe": "5R",
+    "purple stripe": "4R",
+    "blue stripe": "3R",
+    "brown stripe": "2R",
+    "red stripe": "1R",
   };
 
   static yearInKorean = "년";
   static monthInKorean = "월";
   static dayInKorean = "일";
+  static rankInKorean = "급";
 
-  constructor(fName, mName = "", lName, birthDay, numberDan) {
-    (this.fName = fName),
-      (this.mName = mName),
-      (this.lName = lName),
-      (this.numberDan = numberDan.toUpperCase()),
+  constructor(name, birthDay, beltColor, isLilDragon, fullNameInKorean) {
+    if (!birthDay) throw new Error("Failed to obtain birthDay");
+    if (!name) throw new Error("Name is empty");
+    if (!beltColor) throw new Error("Belt color is empty");
+    if (!fullNameInKorean) throw new Error("Full name in korean not provided.");
+
+    const bDayParts = birthDay.split("/");
+    if (bDayParts.length !== 3)
+      throw new Error("Expected a format of MM/DD/YEAR");
+
+    const nameParts = name.split(" ");
+
+    if (nameParts.length < 2)
+      throw new Error(
+        "Name is either not split by space(s).  Check student names."
+      );
+
+    const formattedName = nameParts.map((name, idx) => {
+      const updatedName = name[0].toUpperCase() + name.slice(1);
+      return updatedName;
+    });
+
+    const normalizedBeltColor = beltColor
+      .split(" ")
+      .filter((word) => word.trim().length > 0)
+      .map((word) => word.toLowerCase());
+
+    const normalizedBeltColorKey = normalizedBeltColor.join(" ");
+
+    const computeNumberDan = isLilDragon
+      ? Student.lilDragonRanks[normalizedBeltColorKey]
+      : Student.ranks[normalizedBeltColorKey];
+
+    console.log("This is koreanname before oging in", fullNameInKorean);
+
+    (this.lilDragon = isLilDragon),
+      (this.name = formattedName.join(" ")),
       (this.birthDay = birthDay),
-      (this.koreanRank = Student.ranks[numberDan][1]),
-      (this.beltColor = Student.ranks[numberDan][0]),
-      (this.fullNameInKorean = null);
-  }
-
-  getFullName() {
-    return this.mName
-      ? `${this.fName} ${this.mName} ${this.lName}`
-      : `${this.fName} ${this.lName}`;
+      (this.beltColor = normalizedBeltColor
+        .map((word) => word[0].toUpperCase() + word.slice(1))
+        .join(" ")),
+      (this.fullNameInKorean = fullNameInKorean),
+      (this.numberDan = computeNumberDan);
   }
 
   parseBday() {
-    const parts = this.birthDay.split("-"); // assuming month - day - year format with numbers ex: 6-2-1942
+    const parts = this.birthDay.split("/"); // expecting MM/DD/YY or MM/DD/YYYY
     const month = parseInt(parts[0], 10) - 1;
     const day = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
-    const fullYear = year;
-    const date = new Date(fullYear, month, day);
+    let year = parseInt(parts[2], 10);
+
+    if (year < 100) {
+      const currentYear = new Date().getFullYear();
+      const cutoff = currentYear - 2000 <= 30 ? currentYear - 2000 : 35; // Usually 30
+      year += year <= cutoff ? 2000 : 1900;
+    }
+
+    const date = new Date(year, month, day);
     const options = { year: "numeric", month: "long", day: "numeric" };
     return date.toLocaleDateString("en-US", options);
   }
@@ -130,7 +117,7 @@ export class Student {
         ),
       () =>
         this.createTextOptions(
-          this.koreanRank,
+          Student.rankInKorean,
           koreanFont,
           koreanInfoBlockXPos,
           koreanInfoBlockYPos,
@@ -141,7 +128,7 @@ export class Student {
     const koreanInfoSecondRow = [
       () =>
         this.createTextOptions(
-          this.fullNameInKorean || "마이클   시그",
+          this.fullNameInKorean,
           koreanFont,
           koreanInfoBlockXPos,
           koreanInfoBlockYPos,
@@ -298,7 +285,7 @@ export class Student {
       () =>
         this.createTextOptions(
           `${this.numberDan} ${this.beltColor} Belt`,
-          koreanFont,
+          latinFont,
           certificateXPos,
           certificateYPos,
           size
@@ -308,7 +295,7 @@ export class Student {
     const nameInFullRow = [
       () =>
         this.createTextOptions(
-          this.getFullName(),
+          this.name,
           latinFont,
           certificateXPos,
           certificateYPos,
@@ -354,16 +341,28 @@ export class Student {
   generateCertificateBodyRight(
     certificateBodyRightXPos,
     certificateBodyRightYPos,
-    classCount,
+    testCount,
     latinFont,
     koreanFont,
     size
   ) {
+    const convertTestCount = (testCount) => {
+      const str = String(testCount);
+      const lastTwo = str.slice(-2);
+      const lastOne = str.slice(-1);
+
+      if (["11", "12", "13"].includes(lastTwo)) return str + "th";
+
+      if (lastOne === "1") return str + "st";
+      if (lastOne === "2") return str + "nd";
+      if (lastOne === "3") return str + "rd";
+      return str + "th";
+    };
     return [
       [
         () =>
           this.createTextOptions(
-            classCount.toString(),
+            convertTestCount(testCount),
             latinFont,
             certificateBodyRightXPos + 10,
             certificateBodyRightYPos + 1,

@@ -1,18 +1,46 @@
-const { VertexAI } = require("@google-cloud/vertexai");
-const path = require("path");
-const fs = require("fs").promises;
-const { configDotenv } = require("dotenv");
+import { google } from "googleapis";
+import { GoogleAuth } from "google-auth-library";
+import { GoogleGenAI } from "@google/genai";
+
+import { Storage } from "@google-cloud/storage";
+import { VertexAI } from "@google-cloud/vertexai";
+import path from "path";
+import fs from "fs/promises";
+import { configDotenv } from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 
 configDotenv();
-const GCP_CRED = process.env.GCP_CRED;
-if (!GCP_CRED) throw new Error("GCP cred is not set. Check env.");
-const credentialsPath = path.join(__dirname, GCP_CRED);
-const fileContent = await fs.readFile(credentialsPath, "utf8");
-const credentials = JSON.parse(fileContent);
+// const credentialsPath = process.env.GCP_CRED;
+// const fileContent = await fs.readFile(credentialsPath, "utf8");
+// const credentials = JSON.parse(fileContent);
 
-const { project_id } = credentials;
-if (!project_id || project_id.length === 0)
-  throw new Error("project_id field is empty.");
+const PROJECT_ID = process.env.GCP_PROJECT_ID;
+const LOCATION = process.env.GCP_LOCATION || "us-central1";
+const CREDENTIALS_PATH = process.env.CREDENTIALS_PATH; // Point to your downloaded JSON key file
+
+export async function convertLatinNameToKorean(latinName) {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: `Please return this latin name to korean ${latinName}. Ensure that your response is only the name only.`,
+    });
+
+    if (response && response.text) {
+      return response.text;
+    } else {
+      throw new Error(
+        `Gemini conversion failed for "${latinName}": No text response received.`
+      );
+    }
+  } catch (error) {
+    console.error(`Gemini conversion error for "${latinName}":`, error);
+    throw new Error(
+      `Gemini conversion failed for "${latinName}": ${error.message}`
+    );
+  }
+}
 
 /**
  * Asynchronously retrieves specified properties from the Google Cloud credentials JSON file.
@@ -41,7 +69,3 @@ export const GCP_PROPS = async (options) => {
     return {};
   }
 };
-
-export async function convertLatinNameToKorean(latinName) {
-  t;
-}

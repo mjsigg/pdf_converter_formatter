@@ -17,14 +17,19 @@ export class TKDForm {
   }
 
   createBlock(fieldName, { x, y, width, height }) {
-    const textField = this.form.createTextField(fieldName);
-    textField.addToPage(this.firstPage, {
-      x,
-      y,
-      width,
-      height,
-      borderWidth: 0,
-    });
+    try {
+      const textField = this.form.createTextField(fieldName);
+      textField.addToPage(this.firstPage, {
+        x,
+        y,
+        width,
+        height,
+        borderWidth: 0,
+      });
+    } catch (e) {
+      console.error("Failed on createBlock");
+      throw new Error(e);
+    }
   }
   //  this method is to block out flood an area so it can't be seen on the form.
   createAllBlocks() {
