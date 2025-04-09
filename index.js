@@ -10,6 +10,39 @@ import { convertLatinNameToKorean } from "./services/GeminiService.js";
 
 async function main() {
   const sourceFilePath = "data/source/updated_min.pdf";
+  const BLANK_TEMPLATE_FILENAME = "blank_template.pdf";
+
+  const templateFolderPath = "data/template";
+  const templatefilesAndDirs = await fs.readdir(templateFolderPath);
+  const templateFilePath = path.join(
+    templateFolderPath,
+    BLANK_TEMPLATE_FILENAME
+  );
+
+  let createTemplate = false;
+
+  if (templatefilesAndDirs.length > 1) {
+    throw new Error(
+      "Check template folder. We should be expecting only one called, blank template."
+    );
+  }
+
+  if (createTemplate || templatefilesAndDirs.length === 0) {
+    const templateFormatPath = "formatted_for_template/readyForEdit.pdf";
+
+    await createTemplateFile(sourceFilePath, templateFormatPath);
+    console.log(
+      "Creating template.  Need to print and move to formatted_for_template after creation to prep for drawing."
+    );
+    return;
+  }
+
+  if (!templatefilesAndDirs.includes(BLANK_TEMPLATE_FILENAME)) {
+    throw new Error(
+      `Expected '${BLANK_TEMPLATE_FILENAME}' in the template folder.`
+    );
+  }
+
   const [testCount, jsonFilePath] = await checkAndProcessData();
   const studentsJsonString = await fs.readFile(jsonFilePath, "utf8");
   const studentsJson = JSON.parse(studentsJsonString);
@@ -39,10 +72,8 @@ async function main() {
         currStudent.name
       );
 
-      const BLANK_TEMPLATE_FILENAME = "blank_template.pdf";
       const [pdfDoc, latinFont, koreanFont] = await checkAndProcessTemplate(
-        sourceFilePath,
-        BLANK_TEMPLATE_FILENAME
+        templateFilePath
       );
 
       const form = pdfDoc.getForm();
@@ -67,32 +98,13 @@ async function main() {
       throw new Error("Failed on: ", name);
     }
   }
-
+  console.log("Finished.");
   return;
 }
 
 await main();
 
 // helpers
-async function createTemplateFile(sourceFilePath, savePath) {
-  console.log("Creating template file...");
-  const existingPdfBytes = fs.readFileSync(sourceFilePath);
-  const pdfDoc = await PDFDocument.load(existingPdfBytes);
-  const form = pdfDoc.getForm();
-  const pages = pdfDoc.getPages();
-  const firstPage = pages[0];
-
-  const currentForm = new TKDForm(form, firstPage);
-  currentForm.createAllBlocks();
-
-  const pdfBytes = await pdfDoc.save(savePath);
-  const pathToFormattedFolder =
-    "data/formatted_for_template/" +
-    "formatted_" +
-    sourceFilePath.slice("data/source/".length);
-  fs.writeFileSync(pathToFormattedFolder, pdfBytes);
-  console.log("Successfully created template form to: ", pathToFormattedFolder);
-}
 
 async function createStudentForm(
   currStudent,
@@ -207,49 +219,14 @@ async function createStudentForm(
   }
 }
 
-main();
-
 //helpers
-async function checkAndProcessTemplate(
-  sourceFilePath,
-  BLANK_TEMPLATE_FILENAME
-) {
-  const templateFolderPath = "data/template";
-  const templateFilePath = path.join(
-    templateFolderPath,
-    BLANK_TEMPLATE_FILENAME
-  );
-  const templateFormatPath = "formatted_for_template/readyForEdit.pdf";
-  const templatefilesAndDirs = await fs.readdir(templateFolderPath);
-
+async function checkAndProcessTemplate(templateFilePath) {
   const existingPdfBytes = await fs.readFile(templateFilePath);
   const pdfDoc = await PDFDocument.load(existingPdfBytes);
-  let latinFont;
-  let koreanFont;
-  let createTemplate = false;
-
-  if (templatefilesAndDirs.length > 1) {
-    throw new Error(
-      "Check template folder. We should be expecting only one called, blank template."
-    );
-  }
-
-  if (createTemplate || templatefilesAndDirs.length === 0) {
-    await createTemplateFile(sourceFilePath, templateFormatPath);
-    console.log(
-      "Creating template.  Need to print and move to formatted_for_template after creation to prep for drawing."
-    );
-    return;
-  }
-
-  if (!templatefilesAndDirs.includes(BLANK_TEMPLATE_FILENAME)) {
-    throw new Error(
-      `Expected '${BLANK_TEMPLATE_FILENAME}' in the template folder.`
-    );
-  }
 
   pdfDoc.registerFontkit(fontkit);
-
+  let latinFont;
+  let koreanFont;
   try {
     latinFont = await pdfDoc.embedFont(StandardFonts.TimesRoman, {
       subset: true,
@@ -449,4 +426,25 @@ async function checkAndProcessData() {
   } catch (e) {
     console.error("Error in checkAndProcessData:", e);
   }
+}
+
+async function createTemplateFile(sourceFilePath, savePath) {
+  console.log("Creating template file...");
+  const existingPdfBytes = await fs.readFile(sourceFilePath);
+
+  const pdfDoc = await PDFDocument.load(existingPdfBytes);
+  const form = pdfDoc.getForm();
+  const pages = pdfDoc.getPages();
+  const firstPage = pages[0];
+
+  const currentForm = new TKDForm(form, firstPage);
+  currentForm.createAllBlocks();
+
+  const pdfBytes = await pdfDoc.save(savePath);
+  const pathToFormattedFolder =
+    "data/formatted_for_template/" +
+    "formatted_" +
+    sourceFilePath.slice("data/source/".length);
+  await fs.writeFile(pathToFormattedFolder, pdfBytes);
+  console.log("Successfully created template form to: ", pathToFormattedFolder);
 }

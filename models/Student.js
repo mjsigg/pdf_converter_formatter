@@ -8,7 +8,7 @@ export class Student {
     blue: "3D",
     brown: "2D",
     red: "1D",
-    "recommended black belt level 1": "Recommended Black Belt Level 1",
+    "recommended black belt level 1": "Rec Black Belt",
   };
 
   static lilDragonRanks = {
@@ -49,25 +49,25 @@ export class Student {
       return updatedName;
     });
 
-    const normalizedBeltColor = beltColor
+    let normalizedBeltColor = beltColor
       .split(" ")
       .filter((word) => word.trim().length > 0)
       .map((word) => word.toLowerCase());
 
     const normalizedBeltColorKey = normalizedBeltColor.join(" ");
 
+    normalizedBeltColor = normalizedBeltColor
+      .map((word) => word[0].toUpperCase() + word.slice(1))
+      .join(" ");
+
     const computeNumberDan = isLilDragon
       ? Student.lilDragonRanks[normalizedBeltColorKey]
       : Student.ranks[normalizedBeltColorKey];
 
-    console.log("This is koreanname before oging in", fullNameInKorean);
-
     (this.lilDragon = isLilDragon),
       (this.name = formattedName.join(" ")),
       (this.birthDay = birthDay),
-      (this.beltColor = normalizedBeltColor
-        .map((word) => word[0].toUpperCase() + word.slice(1))
-        .join(" ")),
+      (this.beltColor = normalizedBeltColor),
       (this.fullNameInKorean = fullNameInKorean),
       (this.numberDan = computeNumberDan);
   }
@@ -109,8 +109,12 @@ export class Student {
     const koreanInfoFirstRow = [
       () =>
         this.createTextOptions(
-          this.numberDan,
-          latinFont,
+          this.beltColor.toLowerCase().trim().includes("black")
+            ? "품 " + this.beltColor.trim().at(-1)
+            : this.numberDan,
+          this.beltColor.toLowerCase().trim().includes("black")
+            ? koreanFont
+            : latinFont,
           koreanInfoBlockXPos,
           koreanInfoBlockYPos,
           size
@@ -119,7 +123,7 @@ export class Student {
         this.createTextOptions(
           Student.rankInKorean,
           koreanFont,
-          koreanInfoBlockXPos,
+          koreanInfoBlockXPos + 15,
           koreanInfoBlockYPos,
           size
         ),
@@ -284,7 +288,11 @@ export class Student {
     const takewondoRow = [
       () =>
         this.createTextOptions(
-          `${this.numberDan} ${this.beltColor} Belt`,
+          this.beltColor.toLowerCase().includes("black")
+            ? `Lv ${this.beltColor.trim().at(-1)} Keub ${" ".repeat(
+                5
+              )} Rec Black Belt`
+            : `${this.numberDan} ${this.beltColor} Belt`,
           latinFont,
           certificateXPos,
           certificateYPos,
@@ -328,9 +336,13 @@ export class Student {
       [
         () =>
           this.createTextOptions(
-            this.numberDan,
+            this.beltColor.toLowerCase().trim().includes("black")
+              ? "Rec Black " + `LV ${this.beltColor.trim().at(-1)}`
+              : this.beltColor,
             latinFont,
-            certificateBodyLeftXPos,
+            this.beltColor.toLowerCase().trim().includes("black")
+              ? certificateBodyLeftXPos - 20
+              : certificateBodyLeftXPos,
             certificateBodyLeftYPos,
             size
           ),
