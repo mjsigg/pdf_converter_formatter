@@ -1,0 +1,11 @@
+
+
+Conversion of .PSD to PDF.  createTemplate function can handle converting psd to pdf files so we can use current editing feature sets.
+Completed mapping of current template that is provided.  If positions changed they can be modified within the TKD Form which holds the base coordinates that feed all the student methods for plotting.
+Completed MVP of an example.  Created a local mock example for reference going forward. 
+
+
+TODO:
+
+Need to get google drive/sheet service so we can draw data from source.
+Need to test AI services to convert names written in Latin to Korean.
