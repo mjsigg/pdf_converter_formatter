@@ -68,37 +68,6 @@ async function main() {
     );
     console.log("This is current student: ", currStudent);
 
-    const throwIfFalsy = (param, counter) => {
-      if (!param) throw Error("Issue with the following param: ", counter);
-      console.log(param + " is good to go.");
-    };
-
-    let counter = 0;
-
-    throwIfFalsy(name, counter);
-    console.log("Counter after call, ", counter);
-    counter++;
-    console.log("Counter after call, ", counter);
-    throwIfFalsy(birthDay, counter);
-    console.log("Counter after call, ", counter);
-    counter++;
-    console.log("Counter after call, ", counter);
-    throwIfFalsy(beltColor, counter);
-    console.log("Counter after call, ", counter);
-    counter++;
-    console.log("Counter after call, ", counter);
-    // throwIfFalsy(lilDragon, counter);
-    console.log("Counter after call, ", counter);
-    counter++;
-    console.log("Counter after call, ", counter);
-    // throwIfFalsy(fullNameInKorean, counter);
-    console.log("Counter after call, ", counter);
-    counter++;
-    console.log("Counter after call, ", counter);
-    throwIfFalsy(latestTestDate, counter);
-    console.log("Counter after call, ", counter);
-    counter++;
-    console.log("Counter after call, ", counter);
     try {
       const studentCertFilePath = path.join(
         outPutFilesTestPath,
@@ -376,29 +345,6 @@ async function checkDirectoryExists(directoryPath) {
   }
 }
 
-async function getLatestTestCountDirectory() {
-  const studentDataBasePath = "data/student_data";
-  const filesAndDirs = await fs.readdir(studentDataBasePath);
-  const testCountDirectories = [];
-
-  for (const item of filesAndDirs) {
-    const itemPath = path.join(studentDataBasePath, item);
-    const stats = await fs.stat(itemPath);
-    if (stats.isDirectory() && /^\d+$/.test(item)) {
-      // Assuming testCount dirs are numbers
-      testCountDirectories.push(item);
-    }
-  }
-
-  if (testCountDirectories.length === 0) {
-    throw new Error("No test count directories found.");
-  }
-
-  testCountDirectories.sort((a, b) => parseInt(b) - parseInt(a)); // Get latest (highest number)
-
-  return testCountDirectories[0];
-}
-
 async function checkAndProcessData() {
   const studentDataBasePath = "data/student_data";
 
@@ -419,7 +365,7 @@ async function checkAndProcessData() {
     const latestTestDate = latestCsvFileName.split(".csv")[0];
 
     console.log(
-      "This is latesttest date in check and process data",
+      "This is latest test date in check and process data",
       latestTestDate
     );
     const latestCsvFilePath = path.join(latestTestCountPath, latestCsvFileName);
