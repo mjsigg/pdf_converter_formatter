@@ -27,7 +27,7 @@ export class TKDForm {
         borderWidth: 0,
       });
     } catch (e) {
-      console.error("Failed on createBlock");
+      console.error("Failed on createBlock on fieldName: ", fieldName);
       throw new Error(e);
     }
   }

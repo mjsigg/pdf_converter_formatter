@@ -58,6 +58,7 @@ async function main() {
       fullNameInKorean,
       latestTestDate,
     } = val;
+    console.log("Loading ", name);
     const currStudent = new Student(
       name,
       birthDay,

@@ -1,0 +1,456 @@
+Phase 2: Google Cloud Storage (GCS) Buckets
+These buckets will hold your input files from Google Drive and your processed output files.
+
+Create Source Input Bucket:
+
+In Google Cloud Console, navigate to Navigation Menu > Cloud Storage > Buckets.
+Click CREATE BUCKET.
+Name: your-project-id-excel-sources (or a similar globally unique name).
+Region: Choose a region close to you/your users (e.g., us-central1).
+Storage Class: Standard.
+Access Control: Uniform.
+Action: Source GCS bucket created.
+Create Processed Output Bucket:
+
+Repeat the bucket creation steps.
+Name: your-project-id-processed-output (or another unique name).
+Region: Same as your source bucket for lower costs.
+Storage Class: Standard.
+Access Control: Uniform.
+Action: Processed GCS bucket created.
+Note: Keep these exact bucket names handy!
+Phase 3: Cloud Function Development (Local)
+This is where you'll write the code that processes your PDF files.
+
+Create Function Project Directory:
+
+On your local machine, create a new directory (e.g., my-pdf-processor-function).
+Action: Directory created.
+Create package.json:
+
+Inside your function directory, create a file named package.json with the following content.
+IMPORTANT: Ensure type: "module" for ES6 import syntax.
+JSON
+
+{
+  "name": "pdf-processor-function",
+  "version": "1.0.0",
+  "description": "A Google Cloud Function to process PDFs from Cloud Storage and email signed URLs.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.0.0",
+    "pdf-lib": "^1.17.1",
+    "nodemailer": "^6.9.13"
+  }
+}
+Action: package.json created.
+Create index.js (Your Function Code):
+
+Inside the same directory, create a file named index.js and paste the following code.
+IMPORTANT PLACEHOLDERS TO UPDATE:
+'your-processed-pdfs-bucket' with your actual processed output bucket name.
+SENDER_EMAIL_ADDRESS, EMAIL_SERVICE_HOST, EMAIL_SERVICE_PORT, EMAIL_SERVICE_USER, EMAIL_SERVICE_PASS with your email service credentials.
+The recipientEmail extraction logic (current example assumes _email@example.com in filename).
+Your pdf-lib processing logic (the example currently adds a simple text overlay).
+SECURITY NOTE: For production, DO NOT hardcode email credentials. Use Google Cloud Secret Manager instead.
+JavaScript
+
+// my-pdf-processor-function/index.js
+
+import { Storage } from '@google-cloud/storage';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import path from 'path';
+import os from 'os';
+import fs from 'fs/promises';
+import nodemailer from 'nodemailer';
+
+const storage = new Storage();
+
+// --- Email Configuration ---
+// IMPORTANT: In production, use Google Cloud Secret Manager for these values.
+// Example: process.env.SENDGRID_API_KEY for Secret Manager
+const SENDER_EMAIL_ADDRESS = 'your-sender-email@example.com'; // e.g., noreply@yourdomain.com
+const EMAIL_SERVICE_HOST = 'smtp.sendgrid.net'; // e.g., 'smtp.sendgrid.net' for SendGrid, 'smtp.mailgun.org' for Mailgun
+const EMAIL_SERVICE_PORT = 587; // Common ports: 587 (TLS), 465 (SSL)
+const EMAIL_SERVICE_USER = 'apikey'; // For SendGrid, this is usually 'apikey'
+const EMAIL_SERVICE_PASS = 'YOUR_EMAIL_SERVICE_API_KEY_OR_PASSWORD'; // Replace with your actual key/password
+
+const transporter = nodemailer.createTransport({
+  host: EMAIL_SERVICE_HOST,
+  port: EMAIL_SERVICE_PORT,
+  secure: EMAIL_SERVICE_PORT === 465, // True if using port 465 (SSL), false for 587 (TLS)
+  auth: {
+    user: EMAIL_SERVICE_USER,
+    pass: EMAIL_SERVICE_PASS,
+  },
+});
+
+/**
+ * Responds to an event from Cloud Storage, processes a PDF, and sends a signed URL via email.
+ *
+ * @param {object} file The Cloud Storage event payload (contains bucket, name, contentType).
+ */
+export const processPdfFromGCS = async (file) => {
+  const bucketName = file.bucket;
+  const fileName = file.name;
+  const contentType = file.contentType;
+
+  console.log(`Received file: ${fileName} from bucket: ${bucketName}`);
+
+  if (!contentType || !contentType.startsWith('application/pdf')) {
+    console.warn(`Skipping non-PDF or unknown file type: ${fileName} (Content-Type: ${contentType || 'N/A'})`);
+    return; // Exit if not a PDF
+  }
+
+  const sourceBucket = storage.bucket(bucketName);
+  // !!! IMPORTANT: Replace this with your actual PROCESSED OUTPUT bucket name
+  const destinationBucket = storage.bucket('your-project-id-processed-output');
+
+  const tempInputFilePath = path.join(os.tmpdir(), fileName);
+  const processedFileName = `processed-${fileName}`; // Prepends 'processed-' to original filename
+  const tempOutputFilePath = path.join(os.tmpdir(), processedFileName);
+
+  // --- Determine Recipient Email (CRITICAL LOGIC) ---
+  // This example extracts email from filename like "myreport_user@example.com.pdf"
+  // You NEED to adjust this based on how you identify the user.
+  // Other options: custom GCS object metadata, lookup in a database.
+  const recipientEmailMatch = fileName.match(/_([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$/);
+  const recipientEmail = recipientEmailMatch ? recipientEmailMatch[1] : null;
+
+  if (!recipientEmail) {
+    console.error(`Could not determine recipient email from filename: ${fileName}. Skipping email notification.`);
+    // Decide here if you want to throw an error (stopping function) or just proceed without email.
+    throw new Error('Recipient email not found in filename.');
+  }
+  console.log(`Determined recipient email: ${recipientEmail}`);
+
+  try {
+    // 1. Download the PDF from the source bucket to the function's temporary directory
+    console.log(`Downloading ${fileName} to ${tempInputFilePath}...`);
+    await sourceBucket.file(fileName).download({ destination: tempInputFilePath });
+    console.log(`Downloaded ${fileName} successfully.`);
+
+    // 2. Load and Process the PDF using pdf-lib
+    const existingPdfBytes = await fs.readFile(tempInputFilePath);
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+
+    // --- YOUR PDF-LIB PROCESSING LOGIC GOES HERE ---
+    // Example: Add a text overlay to the first page
+    const pages = pdfDoc.getPages();
+    if (pages.length > 0) {
+      const firstPage = pages[0];
+      const { width, height } = firstPage.getSize();
+      const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      firstPage.drawText(`Processed for ${recipientEmail}!`, { // Personalized text
+        x: 50,
+        y: height - 100,
+        font: helveticaFont,
+        size: 24,
+        color: rgb(0.98, 0.34, 0.11),
+      });
+      console.log('Added personalized text overlay.');
+    } else {
+        console.log('PDF has no pages to process. Skipping text overlay.');
+    }
+    // --- END OF YOUR PDF-LIB PROCESSING LOGIC ---
+
+    // 3. Save the modified PDF bytes to a temporary output file
+    const modifiedPdfBytes = await pdfDoc.save();
+    await fs.writeFile(tempOutputFilePath, modifiedPdfBytes);
+    console.log('Processed PDF saved locally to temp file.');
+
+    // 4. Upload the processed PDF from temp to the destination bucket
+    console.log(`Uploading <span class="math-inline">\{processedFileName\} to gs\://</span>{destinationBucket.name}/${processedFileName}...`);
+    await destinationBucket.upload(tempOutputFilePath, {
+      destination: processedFileName, // Name of the file in the bucket
+      contentType: 'application/pdf',
+    });
+    console.log(`Uploaded processed PDF: gs://<span class="math-inline">\{destinationBucket\.name\}/</span>{processedFileName}`);
+
+    // 5. Generate a Signed URL for the uploaded file
+    // The URL will be valid for 7 days (604800 seconds)
+    const [signedUrl] = await destinationBucket.file(processedFileName).getSignedUrl({
+      version: 'v4', // Required for generating V4 signed URLs
+      action: 'read', // Grants read access (download)
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // Valid for 7 days from now
+    });
+    console.log(`Generated Signed URL: ${signedUrl}`);
+
+    // 6. Send the email with the Signed URL
+    const mailOptions = {
+      from: SENDER_EMAIL_ADDRESS,
+      to: recipientEmail,
+      subject: `Your Processed PDF: ${fileName}`,
+      html: `
+        <p>Hello,</p>
+        <p>Your PDF file "<strong><span class="math-inline">\{fileName\}</strong\>" has been processed\!</p\>
+<p>You can download your processed file here:</p>
+<p><a href="{signedUrl}">Download Processed PDF</a></p>
+<p>This link will expire in 7 days.</p>
+<p>Thank you!</p>
+<p><em>(This is an automated email, please do not reply.)</em></p>
+`,
+};
+
+    await transporter.sendMail(mailOptions);
+    console.log(`Email with Signed URL sent to ${recipientEmail}`);
+
+  } catch (error) {
+    console.error(`Error processing or delivering PDF ${fileName}:`, error);
+    // Re-throw the error so Cloud Functions marks the execution as failed
+    throw new Error(`Failed to process or deliver PDF for ${fileName}: ${error.message}`);
+  } finally {
+    // 7. Clean up temporary files (critical for function stability and cost)
+    try {
+      // Check if file exists safely before trying to unlink
+      if (await fs.stat(tempInputFilePath).catch(() => null)) {
+        await fs.unlink(tempInputFilePath);
+        console.log(`Cleaned up temp input file: ${tempInputFilePath}`);
+      }
+      if (await fs.stat(tempOutputFilePath).catch(() => null)) {
+        await fs.unlink(tempOutputFilePath);
+        console.log(`Cleaned up temp output file: ${tempOutputFilePath}`);
+      }
+    } catch (cleanupError) {
+      console.warn(`Warning: Failed to clean up temporary file(s): ${cleanupError.message}`);
+    }
+  }
+};
+```
+* **Action:** `index.js` created and updated.
+Install Local Dependencies:
+Open your terminal, navigate into your my-pdf-processor-function directory.
+Run: npm install
+This will create a node_modules folder and a package-lock.json file.
+Action: Local dependencies installed.
+Phase 4: Email Service Setup (External)
+You need an external service to send emails.
+
+Choose an Email Service:
+
+Popular options include SendGrid (recommended for ease of use and free tier), Mailgun, Amazon SES.
+Action: Chosen email service (e.g., SendGrid).
+Obtain API Key/Credentials:
+
+Sign up for the chosen service and obtain the necessary API key or SMTP username/password.
+Action: Email service credentials obtained.
+Configure Credentials in index.js (Temporarily for testing) OR Google Cloud Secret Manager (Recommended for Production):
+
+For initial testing, you can paste your credentials directly into index.js as shown in the placeholders.
+For production deployment, strongly consider using Google Cloud Secret Manager. This involves:
+Storing your EMAIL_SERVICE_PASS (and any other sensitive values) as secrets.
+Granting your Cloud Function's Service Account access to these secrets.
+Modifying index.js to retrieve secrets using process.env.
+Action: Email credentials configured (or planned for Secret Manager).
+Phase 5: Cloud Function Deployment
+Now you'll deploy your code to Google Cloud.
+
+Enable Cloud Functions API:
+
+In the Google Cloud Console, navigate to Navigation Menu > APIs & Services > Enabled APIs & services.
+Search for "Cloud Functions API" and ensure it's enabled.
+Action: Cloud Functions API enabled.
+Set IAM Permissions for Cloud Function Service Account:
+
+Your Cloud Function runs using a special Service Account (default name is usually [YOUR_PROJECT_ID]@appspot.gserviceaccount.com).
+This service account needs permissions to access your GCS buckets.
+In Google Cloud Console, navigate to Navigation Menu > IAM & Admin > IAM.
+Find your Cloud Function's Service Account.
+Grant it the following roles:
+Storage Object Viewer (for the source bucket your-project-id-excel-sources)
+Storage Object Creator (for the processed output bucket your-project-id-processed-output)
+(If you plan to use Secret Manager later) Secret Manager Secret Accessor
+Action: IAM permissions granted.
+Deploy the Cloud Function:
+
+Open your terminal.
+Navigate to your my-pdf-processor-function directory (where index.js and package.json are).
+Run the deployment command:
+Bash
+
+gcloud functions deploy processPdfFromGCS \
+  --runtime=nodejs20 \
+  --trigger-bucket=your-project-id-excel-sources \
+  --entry-point=processPdfFromGCS \
+  --memory=1024MB \
+  --timeout=300s \
+  --region=us-central1 # Use the region you chose for your buckets
+Explanation of flags:
+processPdfFromGCS: This is the name you're giving to your Cloud Function.
+--runtime=nodejs20: Specifies Node.js version 20.
+--trigger-bucket=your-project-id-excel-sources: Configures the function to trigger when a new file appears in this bucket.
+--entry-point=processPdfFromGCS: Tells Cloud Functions which exported function in index.js to call.
+--memory=1024MB: PDF processing can be memory-intensive. 1GB is a good starting point. Adjust as needed.
+--timeout=300s: Maximum execution time (5 minutes). Adjust if PDFs are very large/complex.
+--region: Deploy to the same region as your GCS buckets.
+The deployment will take a few minutes as Cloud Build packages and deploys your function.
+Action: Cloud Function deployed.
+Phase 6: Google Apps Script for Google Drive to GCS Sync (The Bridge)
+This script will run in the background, copying files from your Google Drive Shared Drive to your GCS source bucket.
+
+Access Google Apps Script:
+
+Go to https://script.google.com/ and log in with your Google Account.
+Click New project.
+Action: Apps Script project created.
+Add Google Cloud Storage Library:
+
+In your Apps Script project, go to Libraries (the + icon next to Libraries in the left sidebar).
+In the "Add a library" field, paste the script ID for the Google Cloud Storage library for Apps Script: 1sqo7jP5g4r2_yvN5z0w44c5_X-V6Fj4QcE7D6s8A0m
+Click Lookup.
+Select the latest version.
+Set the identifier (alias) as CloudStorage.
+Click Add.
+Action: Cloud Storage library added.
+Add Google Cloud Project Number to Apps Script:
+
+In your Apps Script project, go to Project Settings (the gear icon on the left sidebar).
+Under "Google Cloud Platform (GCP) Project", click Change project.
+Enter your Google Cloud Project NUMBER (not name). You can find your project number in the Google Cloud Console: Navigation Menu > IAM & Admin > Settings.
+Click Set project.
+Action: Apps Script linked to GCP Project.
+Write Apps Script Code:
+
+Replace the default Code.gs content with the following.
+IMPORTANT PLACEHOLDERS TO UPDATE:
+DRIVE_FOLDER_ID: The ID of your Google Drive Shared Drive folder (from its URL).
+GCS_BUCKET_NAME: Your your-project-id-excel-sources bucket name.
+PROCESSED_FOLDER_NAME: A subfolder name within your Drive folder to move processed files to (e.g., "Processed Excels"). Create this subfolder in your Shared Drive.
+JavaScript
+
+// Code.gs (Google Apps Script)
+
+const DRIVE_FOLDER_ID = 'YOUR_GOOGLE_DRIVE_SHARED_FOLDER_ID'; // <--- IMPORTANT: Replace with your Shared Drive folder ID
+const GCS_BUCKET_NAME = 'your-project-id-excel-sources'; // <--- IMPORTANT: Replace with your GCS source bucket name
+const PROCESSED_FOLDER_NAME = 'Processed Excel Files'; // Name of subfolder in Drive to move processed files
+
+/**
+ * Finds new files in a specified Google Drive folder and copies them to Google Cloud Storage.
+ */
+function syncDriveToGCS() {
+  const driveFolder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+  const files = driveFolder.getFiles(); // Get all files in the folder
+
+  const processedFolder = getOrCreateSubfolder(driveFolder, PROCESSED_FOLDER_NAME);
+
+  console.log(`Starting sync for folder: <span class="math-inline">\{driveFolder\.getName\(\)\} \(</span>{DRIVE_FOLDER_ID})`);
+
+  while (files.hasNext()) {
+    const file = files.next();
+
+    // Skip folders or files already marked as processed
+    if (file.isTrashed() || file.getMimeType() === MimeType.FOLDER || file.getParents().hasNext() && file.getParents().next().getId() === processedFolder.getId()) {
+      continue;
+    }
+
+    // Check if the file has already been copied (e.g., by checking a custom property, or by its location)
+    // For simplicity, we'll move the file to a 'Processed' subfolder after copying to avoid reprocessing.
+    // A more robust solution might use custom file properties or a log.
+
+    try {
+      console.log(`Attempting to copy file "${file.getName()}" to GCS...`);
+
+      // Get file content as Blob
+      const blob = file.getBlob();
+
+      // Upload to Google Cloud Storage
+      // The CloudStorage library requires blob.getBytes() and blob.getContentType()
+      // For CloudStorage library version 19, use the format:
+      CloudStorage.Bucket(GCS_BUCKET_NAME).createObject(file.getName(), blob.getBytes(), blob.getContentType());
+
+      console.log(`Successfully copied "<span class="math-inline">\{file\.getName\(\)\}" to GCS bucket "</span>{GCS_BUCKET_NAME}".`);
+
+      // Move the processed file to the 'Processed' subfolder in Drive
+      file.moveTo(processedFolder);
+      console.log(`Moved "<span class="math-inline">\{file\.getName\(\)\}" to Drive folder "</span>{PROCESSED_FOLDER_NAME}".`);
+
+    } catch (e) {
+      console.error(`Failed to copy "${file.getName()}" to GCS or move it in Drive: ${e.message}`);
+      // You might want to log this error more persistently or send an alert.
+    }
+  }
+  console.log('Drive to GCS sync finished.');
+}
+
+/**
+ * Helper function to get or create a subfolder within a given parent folder.
+ */
+function getOrCreateSubfolder(parentFolder, subfolderName) {
+  const folders = parentFolder.getFoldersByName(subfolderName);
+  if (folders.hasNext()) {
+    return folders.next();
+  } else {
+    console.log(`Creating new subfolder: ${subfolderName}`);
+    return parentFolder.createFolder(subfolderName);
+  }
+}
+Action: Apps Script code pasted.
+Set Apps Script Permissions:
+
+Save the Apps Script project (File > Save project). Give it a name like "DriveToGCSUploader".
+Run the syncDriveToGCS function manually for the first time. You'll be prompted to review and authorize permissions. Grant all necessary permissions (Drive access, external connections to Google Cloud). This is crucial.
+Action: Apps Script permissions authorized.
+Set up a Time-Driven Trigger for Apps Script:
+
+In your Apps Script project, go to Triggers (the clock icon on the left sidebar).
+Click Add Trigger.
+Choose function to run: syncDriveToGCS
+Choose deployment to run: Head
+Select event source: Time-driven
+Select type of time based trigger: Minutes timer (recommended for frequent checks) or Hour timer.
+Select minute interval: e.g., 5 minutes or 10 minutes (don't set it too frequent to stay within quotas).
+Click Save.
+Action: Apps Script time-driven trigger configured.
+Phase 7: Testing & Monitoring
+It's time to test the entire flow!
+
+Upload a Test PDF File to Google Drive:
+
+Take a small PDF file.
+IMPORTANT: Rename it to include a test email for your index.js parsing, e.g., mytestfile_test@example.com.pdf.
+Upload this file to the specific Google Drive Shared Drive folder you configured in your Apps Script (DRIVE_FOLDER_ID).
+Action: Test file uploaded to Drive.
+Monitor Apps Script Execution:
+
+In your Apps Script project, go to Executions (the list icon on the left sidebar).
+You should see your syncDriveToGCS function running according to its trigger schedule. Look for "Completed" status.
+Check the logs for any errors (View > Executions or the bottom panel of the editor).
+Action: Apps Script execution monitored.
+Verify File in Source GCS Bucket:
+
+Once the Apps Script shows successful execution, go to your Google Cloud Console.
+Navigate to Cloud Storage > Buckets > your-project-id-excel-sources.
+You should see your mytestfile_test@example.com.pdf appear there.
+Action: File verified in Source GCS.
+Monitor Cloud Function Execution & Logs:
+
+As soon as the file lands in the source GCS bucket, your Cloud Function should trigger.
+In Google Cloud Console, navigate to Navigation Menu > Cloud Functions.
+Click on your processPdfFromGCS function.
+Go to the Logs tab. Look for "Function execution started" and follow the log messages for download, processing, upload, and email sending. Watch for any errors.
+Action: Cloud Function execution and logs monitored.
+Verify Processed File in Output GCS Bucket:
+
+In Google Cloud Console, navigate to Cloud Storage > Buckets > your-project-id-processed-output.
+You should see processed-mytestfile_test@example.com.pdf there.
+Action: Processed file verified in Output GCS.
+Check Recipient Email Inbox:
+
+Check the inbox of test@example.com (or whatever email you used in the filename).
+You should receive an email from your configured sender address with a link to download the processed PDF.
+Test the link!
+Action: Email with Signed URL received and link tested.
+
+Sources
+
+
+
+

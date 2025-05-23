@@ -1,0 +1,45 @@
+The Bridge: Google Drive to Google Cloud Storage
+Since Google Cloud Functions don't directly trigger from Google Drive events (like a new file being added to a folder), we need a "bridge" to get the files from the Google Drive Shared Drive into a Google Cloud Storage bucket. This Cloud Storage bucket will then serve as the direct trigger for your PDF processing Cloud Function.
+
+The best serverless, Google-native way to build this bridge is using Google Apps Script.
+
+What is Google Apps Script?
+Google Apps Script is a cloud-based JavaScript platform developed by Google for building lightweight web applications and automating tasks across Google products (like Google Sheets, Docs, Drive, Gmail, etc.) and external services. It runs entirely in Google's infrastructure, so there's nothing to host or manage on your end.
+
+High-Level Flow with Apps Script:
+User uploads Excel file to a specific folder in a Google Drive Shared Drive.
+Google Apps Script (running on a schedule or triggered by a Drive event) detects new files in that folder.
+Apps Script reads the file from Google Drive and copies it to a designated Google Cloud Storage bucket.
+The file landing in the Google Cloud Storage bucket triggers your Cloud Function.
+Your Cloud Function processes the Excel file.
+The processed output (e.g., CSV, processed PDF) is uploaded to another Google Cloud Storage bucket.
+Next Steps: Setting Up the Storage Buckets First
+Before we write any Apps Script, you'll need the Google Cloud Storage buckets ready.
+
+Step 5: Create Google Cloud Storage Buckets
+
+You'll need at least two buckets:
+
+source-excel-files-bucket (or similar): This bucket will receive the Excel files copied from Google Drive. This is the bucket your Cloud Function will be triggered by.
+processed-output-bucket (or similar): This bucket will store the processed files (e.g., CSV, transformed Excel, or even the resulting PDF if your pdf-lib step outputs a PDF later).
+How to create them:
+
+Go to the Google Cloud Console: https://console.cloud.google.com/
+Ensure you're in the correct Google Cloud Project (the one you created earlier).
+In the Navigation menu (three horizontal lines, top-left), navigate to Cloud Storage > Buckets.
+Click "CREATE BUCKET".
+For your source-excel-files-bucket:
+Name your bucket: Choose a globally unique name (e.g., your-project-id-excel-sources, my-app-excel-uploads). This name must be unique across all of Google Cloud, so be creative.
+Choose where to store your data:
+Region: Select a region (e.g., us-central1, us-east1) that is geographically close to your users or where you intend to deploy your Cloud Function later.
+Storage class: For most cases, Standard is fine. If you expect very infrequent access, you could consider Nearline or Coldline, but Standard is usually the best default.
+Access control: Keep "Uniform" unless you have specific reasons for "Fine-grained." Uniform is simpler for IAM permissions.
+Click "CREATE".
+Repeat these steps for your processed-output-bucket:
+Give it a distinct name (e.g., your-project-id-processed-output).
+Choose the same region and storage class for consistency.
+Click "CREATE".
+Action for you:
+
+Create these two Cloud Storage buckets.
+Make a note of their exact names. You'll need these names for both the Apps Script and your Cloud Function.

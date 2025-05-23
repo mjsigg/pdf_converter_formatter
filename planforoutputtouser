@@ -1,0 +1,21 @@
+Options for Users to Retrieve Processed Files from Cloud Storage:
+1. Email Notification with a Signed URL (Recommended for Simplicity & Security)
+This is often the most straightforward and user-friendly way to deliver files without building a full web app.
+
+How it works:
+After your Cloud Function successfully processes a file and uploads it to the processed-output-bucket.
+As the last step of your Cloud Function's execution, it would generate a Signed URL for that newly processed file.
+The Cloud Function then uses a service like SendGrid, Mailgun, or Google Cloud SendGrid Integration (or even directly with Google Workspace Gmail API if you have that configured) to send an email to the user who submitted the original file.
+This email would contain a direct link (the Signed URL) to download their processed file.
+What is a Signed URL?
+It's a URL that grants temporary permission to download a specific Cloud Storage object (file).
+You define how long the link is valid (e.g., 1 hour, 24 hours, 7 days).
+Anyone with the link can download the file during that time, but they don't need Google Cloud credentials.
+It's far more secure than making the bucket public.
+Pros:
+No frontend needed for the user to download. They get an email, click a link.
+Secure: Links are time-limited.
+Scalable: Cloud Functions can easily handle sending emails.
+Cons:
+Requires integration with an email sending service (which might have its own free tiers/costs).
+You need to know the user's email address (perhaps from the file name, metadata, or an initial prompt in Google Drive if you add a simple form).

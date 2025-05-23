@@ -44,8 +44,6 @@ export class Student {
     if (!beltColor) throw new Error("Belt color is empty");
     if (!fullNameInKorean) throw new Error("Full name in korean not provided.");
 
-    console.log("This is isLilDragon", lilDragon);
-
     const bDayParts = birthDay.split("/");
     if (bDayParts.length !== 3)
       throw new Error("Expected a format of MM/DD/YEAR");
