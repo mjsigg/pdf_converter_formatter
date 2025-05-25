@@ -1,14 +1,20 @@
 import fs from "fs/promises";
-
 import path from "path";
-
-import { PDFDocument, rgb, StandardFonts, degrees } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { TKDForm } from "./models/TKDForm.js";
 import { Student } from "./models/Student.js";
 import { convertLatinNameToKorean } from "./services/GeminiService.js";
 
+import { Storage } from "@google-cloud/storage";
+
 async function main() {
+  const assetsBucketName = "tkd_assets";
+  const processedPdfBucketName = "fully_processed_pdfs";
+  const sourceBucketName = "tkd_source";
+
+  const BLANK_TEMPLATE_COMPRESSED_FILENAME = "blank_template_compressed.pdf";
+
   const sourceFilePath = "data/source/updated_min.pdf";
   const BLANK_TEMPLATE_FILENAME = "blank_template_compressed.pdf";
 
