@@ -18,6 +18,13 @@ Example of event
   // ... other properties
 }
 */
+
+// --- NEW IMPORTS FOR CSV HANDLING ---
+import stream from "stream";
+import { promisify } from "util";
+import csv from "csv-parser";
+const pipeline = promisify(stream.pipeline);
+
 // --- Constants ---
 const OUTPUT_BUCKET_NAME = "tkd_output_pdf"; // Your actual output bucket
 const ASSETS_BUCKET_NAME = "tkd_assets"; // Your actual assets bucket
@@ -29,80 +36,123 @@ const SPREADSHEET_ID = "1YRuZUPwIASP1U-N0CT7KtHaYEJ6v0lOYfiF0mc0FB_M";
 const SHEET_RANGE = "Sheet1!A:B"; // Adjust 'Sheet1' to your actual sheet tab name if different
 
 export async function main(event, context) {
-  let inputFileName;
-  let inputBucketName;
+  console.log("Starting application ...");
+
+  // --- Initialize Storage FIRST ---
   const storage = new Storage();
+  let assetsBucket = storage.bucket(ASSETS_BUCKET_NAME);
 
-  console.log("Attemping to load blank template file and korean font");
-  const assetsBucket = storage.bucket(ASSETS_BUCKET_NAME);
-  const templateFile = assetsBucket.file(
-    `templates/${BLANK_TEMPLATE_FILENAME}`
-  );
-  const koreanFontFile = assetsBucket.file(`fonts/${KOREAN_FONT_FILENAME}`);
+  let inputCsvContent;
+  let testCount;
+  let eventDate;
+  let outPutFilePath;
 
-  // 3. Download both files concurrently for efficiency
-  const [templateDownloadResult, koreanFontDownloadResult] = await Promise.all([
-    templateFile.download(),
-    koreanFontFile.download(),
-  ]);
+  // Determine if running as a Cloud Function (Google Drive event) or locally
+  const fileId = event?.data?.fileId; // For Google Drive trigger
 
-  const [templateBuffer] = templateDownloadResult;
-  console.log("Template PDF downloaded from Cloud Storage.");
-
-  const [koreanFontBuffer] = koreanFontDownloadResult;
-  console.log("Korean font downloaded from Cloud Storage.");
-
-  // 4. Load the PDF document from the downloaded buffer
-  const existingPdfBytes = templateBuffer;
-  const pdfDoc = await PDFDocument.load(existingPdfBytes, {
-    // You might need to disable strict parsing if your compressed PDF has minor issues
-    // ignoreEncryption: true,
-    // throwOnInvalidObject: false,
-  });
-
-  // 5. Register fontkit and embed the Korean font
-  pdfDoc.registerFontkit(fontkit);
-  const koreanFont = await pdfDoc.embedFont(koreanFontBuffer, {
-    family: "Noto Serif KR", // A descriptive name for your font
-    // subsets: [0, 1] // Optional: if you only need certain Unicode ranges for smaller size
-  });
-  console.log("Korean font embedded into PDFDocument.");
-  // Example: Get the first page of the template
-  const pages = pdfDoc.getPages();
-  const firstPage = pages[0];
-  console.log(`Template has ${pages.length} page(s).`);
-
-  let studentNameMap = new Map();
-  const auth = new google.auth.GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
-
-  const authClient = await auth.getClient();
-  const sheets = google.sheets({ version: "v4", auth: authClient });
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: SHEET_RANGE,
-  });
-
-  const values = response.data.values.slice(1);
-
-  if (values && values.length > 0) {
-    values.forEach((row) => {
-      if (row[0] && row[1]) {
-        studentNameMap.set(row[0].trim(), row[1].trim());
-      }
-    });
+  if (fileId) {
+    // Running as a Cloud Function, triggered by Google Drive event
     console.log(
-      `Successfully loaded ${studentNameMap.size} name mappings from Google Sheet.`
+      `Cloud Function triggered by Google Drive file with ID: ${fileId}`
     );
+
+    // --- Authenticate for Google Drive API ---
+    const auth = new google.auth.GoogleAuth({
+      scopes: [
+        "https://www.googleapis.com/auth/drive.readonly", // To read files from Google Drive
+        "https://www.googleapis.com/auth/spreadsheets.readonly", // Still needed for the name map sheet
+      ],
+    });
+    const authClient = await auth.getClient();
+    const drive = google.drive({ version: "v3", auth: authClient });
+
+    // --- Download the Google Sheet (CSV) Content from Drive ---
+    console.log(`Downloading CSV content for file ID: ${fileId}`);
+    try {
+      const res = await drive.files.export(
+        {
+          fileId: fileId,
+          mimeType: "text/csv", // Request to export as CSV
+        },
+        {
+          responseType: "stream", // Get the response as a stream
+        }
+      );
+
+      const chunks = [];
+      await pipeline(res.data, async function* (source) {
+        for await (const chunk of source) {
+          chunks.push(chunk);
+          yield chunk;
+        }
+      });
+      inputCsvContent = Buffer.concat(chunks).toString("utf8");
+      console.log("CSV content downloaded successfully from Google Drive.");
+
+      // Attempt to get the original filename from Drive metadata for output naming
+      try {
+        const fileMetadata = await drive.files.get({
+          fileId: fileId,
+          fields: "name",
+        });
+        if (fileMetadata.data.name) {
+        }
+      } catch (metaError) {
+        console.warn(
+          `Could not retrieve original filename for fileId ${fileId}: ${metaError.message}. Using default output name.`
+        );
+      }
+    } catch (driveError) {
+      console.error("Error downloading CSV from Google Drive:", driveError);
+      throw new Error(
+        `Failed to download CSV from Drive: ${driveError.message}`
+      );
+    }
   } else {
-    throw new Error("Failed to load students map.  Check google sheet.");
+    // Running locally, provide mock CSV content from a file in GCS
+    console.warn("Running locally. Loading mock CSV from Cloud Storage.");
+    const mockFileName = "172_05_17_2025.csv"; // Name of your mock CSV file
+    const mockCsvFile = assetsBucket.file(`mocks/${mockFileName}`); // Path within assets bucket
+
+    try {
+      const [mockCsvBuffer] = await mockCsvFile.download();
+      inputCsvContent = mockCsvBuffer.toString("utf8");
+      console.log(
+        `Mock CSV "${mockFileName}" loaded successfully from Cloud Storage.`
+      );
+      let splitMockName = mockFileName.split(".");
+      splitMockName.pop();
+      splitMockName = splitMockName.join("_").split("_");
+      testCount = splitMockName.shift();
+      eventDate = splitMockName.join("/");
+      outPutFilePath = path.join(
+        ".",
+        "data",
+        "output_files",
+        String(testCount)
+      );
+    } catch (mockError) {
+      console.error(`Error loading mock CSV "${mockFileName}":`, mockError);
+      throw new Error(
+        `Failed to load mock CSV for local testing: ${mockError.message}`
+      );
+    }
+  }
+
+  // Configurations should be loaded, student map should be loaded, testcount & event loaded
+  // we should be able to loop over every student now
+  for (let line of inputCsvContent.split("\n")) {
+    const [name, lildragonBelt, adultJrBelt, DOB, isJrOrAdult] =
+      line.split(",");
+
+    const beltColor = lildragonBelt ? lildragonBelt : adultJrBelt;
+    // console.log("This is name", name);
+    console.log("This is beltcolor", beltColor);
   }
 
   return;
 
-  const [testCount, jsonFilePath, latestTestDate] = await checkAndProcessData();
+  // const [testCount, jsonFilePath, latestTestDate] = await checkAndProcessData();
   const studentsJsonString = await fs.readFile(jsonFilePath, "utf8");
   const studentsJson = JSON.parse(studentsJsonString);
   const outPutFilesTestPath = path.join("data/output_files", testCount);
