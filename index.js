@@ -7,17 +7,7 @@ import { Student } from "./models/Student.js";
 import { Storage } from "@google-cloud/storage";
 import { convertLatinNameToKorean } from "./services/GeminiService.js";
 import { google } from "googleapis";
-/*
-Example of event
-{
-  "bucket": "your-input-bucket",
-  "name": "testcount_05_25_2025.pdf", // This is the part we want!
-  "contentType": "application/pdf",
-  "timeCreated": "2025-05-25T19:30:00.000Z",
-  "updated": "2025-05-25T19:30:00.000Z",
-  // ... other properties
-}
-*/
+import archiver from "archiver";
 // --- NEW IMPORTS FOR CSV HANDLING ---
 import stream from "stream";
 import { promisify } from "util";
@@ -60,31 +50,6 @@ export async function main(event, context) {
   const [koreanFontBuffer] = koreanFontDownloadResult;
   console.log("Korean font downloaded from Cloud Storage.");
 
-  const existingPdfBytes = templateBuffer;
-  const tkdForm = await PDFDocument.load(existingPdfBytes, {
-    // You might need to disable strict parsing if your compressed PDF has minor issues
-    // ignoreEncryption: true,
-    // throwOnInvalidObject: false,
-  });
-
-  // 5. Register fontkit and embed the Korean font
-  tkdForm.registerFontkit(fontkit);
-  const koreanFont = await tkdForm.embedFont(koreanFontBuffer, {
-    family: "Noto Serif KR", // A descriptive name for your font
-    // subsets: [0, 1] // Optional: if you only need certain Unicode ranges for smaller size
-  });
-  let latinFont = await tkdForm.embedFont(StandardFonts.TimesRoman, {
-    subset: true,
-  });
-
-  // Example: Get the first page of the template
-  const pages = tkdForm.getPages();
-  const firstPage = pages[0];
-  console.log(`Template has ${pages.length} page(s).`);
-  console.log("Korean font embedded into PDFDocument.");
-  console.log("Latin font embedded into PDFDocument.");
-  console.log("Template PDF loaded into PDFDocument.");
-
   let inputCsvContent;
   let testCount;
   let eventDate;
@@ -92,22 +57,23 @@ export async function main(event, context) {
 
   // Determine if running as a Cloud Function (Google Drive event) or locally
   const fileId = event?.data?.fileId; // For Google Drive trigger
+  const localEnv = fileId ? false : true;
+  const auth = new google.auth.GoogleAuth({
+    scopes: [
+      "https://www.googleapis.com/auth/drive", // To read files from Google Drive
+      "https://www.googleapis.com/auth/spreadsheets", // Still needed for the name map sheet
+      "https://www.googleapis.com/auth/devstorage.read_write", // <-- ADD THIS FOR GCS!
+    ],
+  });
+  const authClient = await auth.getClient();
+  const drive = google.drive({ version: "v3", auth: authClient });
+  const sheets = google.sheets({ version: "v4", auth: authClient });
 
   if (fileId) {
     // Running as a Cloud Function, triggered by Google Drive event
     console.log(
       `Cloud Function triggered by Google Drive file with ID: ${fileId}`
     );
-
-    // --- Authenticate for Google Drive API ---
-    const auth = new google.auth.GoogleAuth({
-      scopes: [
-        "https://www.googleapis.com/auth/drive.readonly", // To read files from Google Drive
-        "https://www.googleapis.com/auth/spreadsheets.readonly", // Still needed for the name map sheet
-      ],
-    });
-    const authClient = await auth.getClient();
-    const drive = google.drive({ version: "v3", auth: authClient });
 
     // --- Download the Google Sheet (CSV) Content from Drive ---
     console.log(`Downloading CSV content for file ID: ${fileId}`);
@@ -143,9 +109,7 @@ export async function main(event, context) {
         if (fileName) {
           const parts = fileName.replace(/\.csv$/i, "").split("_"); // Remove .csv extension and split by underscore
           testCount = parts[0];
-          eventDate = `${String(Number(parts[1]))}/${String(
-            Number(parts[2])
-          )}/${parts[3]}`;
+          eventDate = [parts[1], parts[2], parts[3]];
         }
       } catch (metaError) {
         console.warn(
@@ -172,9 +136,7 @@ export async function main(event, context) {
       );
       const parts = mockFileName.replace(/\.csv$/i, "").split("_"); // Remove .csv extension and split by underscore
       testCount = parts[0];
-      eventDate = `${String(Number(parts[1]))}/${String(Number(parts[2]))}/${
-        parts[3]
-      }`;
+      eventDate = eventDate = [parts[1], parts[2], parts[3]];
 
       outPutFilePath = path.join(
         ".",
@@ -213,12 +175,6 @@ export async function main(event, context) {
 
   // load studentMap
   let studentNameMap = new Map();
-  const auth = new google.auth.GoogleAuth({
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
-
-  const authClient = await auth.getClient();
-  const sheets = google.sheets({ version: "v4", auth: authClient });
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
@@ -242,7 +198,10 @@ export async function main(event, context) {
 
   // Configurations should be loaded, student map should be loaded, testcount & event loaded
   // we should be able to loop over every student now
+
+  // start of processing PDFs
   const updateNamesMap = [];
+  const allGeneratedPdfs = [];
   for (let line of inputCsvContent.split("\n")) {
     if (!line.trim() || line.startsWith("Name")) continue;
     let [name, lildragonBelt, adultJrBelt, bDay, isJrOrAdult] = line.split(",");
@@ -269,6 +228,7 @@ export async function main(event, context) {
         console.log(`Gemini translated "${name}" to "${fullNameInKorean}".`);
       }
     }
+
     const currStudent = new Student(
       name,
       bDay,
@@ -278,92 +238,139 @@ export async function main(event, context) {
       eventDate
     );
 
+    // setting up pdf here
+    const existingPdfBytes = templateBuffer;
+    const studentPdfDoc = await PDFDocument.load(existingPdfBytes, {
+      // You might need to disable strict parsing if your compressed PDF has minor issues
+      // ignoreEncryption: true,
+      // throwOnInvalidObject: false,
+    });
+    studentPdfDoc.registerFontkit(fontkit);
+    const studentPages = studentPdfDoc.getPages();
+    const studentFirstPage = studentPages[0];
+
+    // TODO: tried setting the font characters to feed into the doc rather than loading all of it.
+    // still not sure how to use it so we can reduce the amount of characters we inject into the document
+    const allKoreanText = [
+      fullNameInKorean,
+      Student.rankInKorean,
+      Student.monthInKorean,
+      Student.dayInKorean,
+      "품",
+    ]
+      .filter(Boolean)
+      .join("");
+
+    const uniqueKoreanUnicodes = new Set();
+    for (const char of allKoreanText) {
+      uniqueKoreanUnicodes.add(char.codePointAt(0));
+    }
+
+    let koreanFont = await studentPdfDoc.embedFont(koreanFontBuffer, {
+      family: "Noto Serif KR",
+      subset: false,
+    });
+
+    let latinFont = await studentPdfDoc.embedFont(StandardFonts.TimesRoman, {
+      subset: true,
+    });
+
+    // Example: Get the first page of the template
+    const tkdForm = new TKDForm(studentPdfDoc, studentFirstPage);
+
+    console.log(`Template has ${studentPages.length} page(s).`);
+    console.log("Korean font embedded into PDFDocument.");
+    console.log("Latin font embedded into PDFDocument.");
+    console.log("Template PDF loaded into PDFDocument.");
+
     createStudentForm(
       currStudent,
       latinFont,
       koreanFont,
       tkdForm,
-      firstPage,
+      studentFirstPage,
       testCount,
       eventDate
     );
+
+    const studentCertPath = path.join(
+      outPutFilePath,
+      currStudent.name + ".pdf"
+    );
+    console.log(
+      `Saving ${currStudent.name}'s certification to: `,
+      studentCertPath
+    );
+
+    /*
+    note: blocking off portion that was working for local printing as the fallback here.  this was before trying to implement zip portion.
+    
+    const pdfBytes = await studentPdfDoc.save();
+    allGeneratedPdfs.push({ fileName: studentCertPath, pdfBytes: pdfBytes });
+    console.log(`PDF generated and collected for: ${currStudent.name}`);
+    
+    if (localEnv) {
+      await fs.writeFile(studentCertPath, pdfBytes);
+    }
+    */
+
+    //This portion is for saving to zip portion
+    const uint8ArrayPdf = await studentPdfDoc.save();
+    const pdfBytes = Buffer.from(uint8ArrayPdf);
+    allGeneratedPdfs.push({ fileName: studentCertPath, pdfBytes });
+  }
+  // Post Processing of PDFs
+  console.log("All student forms processed.");
+
+  // zipper portion
+  try {
+    const batchZipSignedUrl = await createAndUploadZip(
+      allGeneratedPdfs,
+      String(testCount) + "_" + eventDate,
+      OUTPUT_BUCKET_NAME,
+      storage
+    );
+    console.log("Batch Zip Signed URL:", batchZipSignedUrl);
+  } catch (e) {
+    console.error("Failed to create and upload batch zip: ", e);
   }
 
-  return;
-
-  // const [testCount, jsonFilePath, latestTestDate] = await checkAndProcessData();
-  const studentsJsonString = await fs.readFile(jsonFilePath, "utf8");
-  const studentsJson = JSON.parse(studentsJsonString);
-  const outPutFilesTestPath = path.join("data/output_files", testCount);
-  const outFilesTestPathExists = await checkDirectoryExists(
-    outPutFilesTestPath
+  // update studentNamesMap
+  if (updateNamesMap.length === 0) return;
+  console.log("New names translated and collected:", updateNamesMap);
+  console.log(
+    `Appending ${updateNamesMap.length} new name mappings to Google Sheet.`
   );
 
-  if (!outFilesTestPathExists) {
-    await fs.mkdir(outPutFilesTestPath);
-  }
+  const valuesToAppend = updateNamesMap.map((entry) => [
+    entry.englishName,
+    entry.koreanName,
+  ]);
 
-  for (let [key, val] of Object.entries(studentsJson)) {
-    const {
-      name,
-      birthDay,
-      beltColor,
-      lilDragon,
-      fullNameInKorean,
-      latestTestDate,
-    } = val;
-    console.log("Loading ", name);
-    const currStudent = new Student(
-      name,
-      birthDay,
-      beltColor,
-      lilDragon,
-      fullNameInKorean,
-      latestTestDate
+  try {
+    const appendResponse = await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: SHEET_RANGE, // Append to the end of the specified sheet and range
+      valueInputOption: "RAW", // Treat input values as raw strings
+      resource: {
+        values: valuesToAppend,
+      },
+    });
+
+    console.log(
+      `Successfully appended ${appendResponse.data.updates.updatedCells} cells ` +
+        `across ${appendResponse.data.updates.updatedRows} rows to Google Sheet.`
     );
-    console.log("This is current student: ", currStudent);
-
-    try {
-      const studentCertFilePath = path.join(
-        outPutFilesTestPath,
-        currStudent.name
-      );
-
-      const [pdfDoc, latinFont, koreanFont] = await checkAndProcessTemplate(
-        templateFilePath
-      );
-
-      const form = pdfDoc.getForm();
-      const pages = pdfDoc.getPages();
-      const firstPage = pages[0];
-
-      const tkdForm = new TKDForm(form, firstPage);
-
-      createStudentForm(
-        currStudent,
-        latinFont,
-        koreanFont,
-        tkdForm,
-        firstPage,
-        testCount,
-        latestTestDate
-      );
-
-      const pdfBytes = await pdfDoc.save(studentCertFilePath);
-      await fs.writeFile(studentCertFilePath + ".pdf", pdfBytes);
-    } catch (e) {
-      console.error(e);
-      throw new Error("Failed on: ", name);
-    }
+  } catch (writeError) {
+    console.error("Error writing new names back to Google Sheet:", writeError);
   }
-  console.log("Finished.");
+
   return;
 }
 
-await main();
+await main().catch(console.error);
 
 // helpers
-
 async function createStudentForm(
   currStudent,
   latinFont,
@@ -475,6 +482,71 @@ async function createStudentForm(
   } catch (e) {
     console.error("Error in certificate block right", e);
   }
+}
+
+// zipper helper
+async function createAndUploadZip(
+  pdfsToZip,
+  zipFileName = "all_student_forms.zip",
+  OUTPUT_BUCKET_NAME,
+  storage
+) {
+  return new Promise(async (resolve, reject) => {
+    const archive = archiver("zip", {
+      zlib: { level: 9 }, // Sets the compression level.
+    });
+
+    // Create a buffer to store the zip archive
+    const zipBufferChunks = [];
+    archive.on("data", (chunk) => zipBufferChunks.push(chunk));
+    archive.on("end", async () => {
+      const zipBuffer = Buffer.concat(zipBufferChunks);
+
+      console.log(
+        `Zip file "${zipFileName}" created. Size: ${zipBuffer.length} bytes`
+      );
+
+      // 1. Upload the Zip Buffer to GCS
+      const bucket = storage.bucket(OUTPUT_BUCKET_NAME);
+      const file = bucket.file(zipFileName);
+
+      try {
+        await file.save(zipBuffer, {
+          metadata: { contentType: "application/zip" },
+          resumable: false,
+        });
+        console.log(
+          `Zip file "${zipFileName}" uploaded to ${OUTPUT_BUCKET_NAME}.`
+        );
+
+        // 2. Generate a signed URL for the Zip file (expires in 15 minutes)
+        const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
+        const [signedUrl] = await file.getSignedUrl({
+          version: "v4",
+          action: "read",
+          expires: Date.now() + ONE_DAY_IN_MS,
+        });
+
+        console.log(`Signed URL for "${zipFileName}": ${signedUrl}`);
+        resolve(signedUrl);
+      } catch (uploadError) {
+        console.error(
+          `Error uploading or generating signed URL for "${zipFileName}":`,
+          uploadError
+        );
+        reject(uploadError);
+      }
+    });
+
+    archive.on("error", (err) => reject(err));
+
+    // Add each PDF to the zip archive
+    for (const pdfItem of pdfsToZip) {
+      archive.append(pdfItem.pdfBytes, { name: pdfItem.fileName });
+    }
+
+    archive.finalize(); // Finalize the archive (trigger 'end' event)
+  });
 }
 
 //helpers

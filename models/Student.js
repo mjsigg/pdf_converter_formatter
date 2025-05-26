@@ -72,11 +72,13 @@ export class Student {
       ? Student.lilDragonRanks[normalizedBeltColorKey]
       : Student.ranks[normalizedBeltColorKey];
 
-    const parseTestDate = latestTestDate
-      .trim()
-      .split("/")
-      .map((val) => String(parseInt(val)))
-      .join("/");
+    // const parseTestDate = latestTestDate
+    //   .trim()
+    //   .split("_")
+    //   .map((val) => String(parseInt(val)))
+    //   .join("_");
+
+    const [month, day, year] = latestTestDate;
 
     (this.lilDragon = lilDragon),
       (this.name = formattedName.join(" ")),
@@ -84,7 +86,7 @@ export class Student {
       (this.beltColor = normalizedBeltColor),
       (this.fullNameInKorean = fullNameInKorean.trim()),
       (this.numberDan = computeNumberDan),
-      (this.latestTestDate = parseTestDate);
+      (this.latestTestDate = [month, day, year]);
   }
 
   parseBday() {
