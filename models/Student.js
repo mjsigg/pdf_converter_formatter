@@ -74,8 +74,9 @@ export class Student {
 
     const parseTestDate = latestTestDate
       .trim()
-      .split("_")
-      .map((val) => String(parseInt(val)));
+      .split("/")
+      .map((val) => String(parseInt(val)))
+      .join("/");
 
     (this.lilDragon = lilDragon),
       (this.name = formattedName.join(" ")),

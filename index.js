@@ -18,7 +18,6 @@ Example of event
   // ... other properties
 }
 */
-
 // --- NEW IMPORTS FOR CSV HANDLING ---
 import stream from "stream";
 import { promisify } from "util";
@@ -33,7 +32,7 @@ const KOREAN_FONT_FILENAME = "NotoSerifKR-SemiBold.ttf";
 
 // Google Sheet Details for student_name_map
 const SPREADSHEET_ID = "1YRuZUPwIASP1U-N0CT7KtHaYEJ6v0lOYfiF0mc0FB_M";
-const SHEET_RANGE = "Sheet1!A:B"; // Adjust 'Sheet1' to your actual sheet tab name if different
+const SHEET_RANGE = "Sheet1!A:B"; // A: EnglishName, B: KoreanName
 
 export async function main(event, context) {
   console.log("Starting application ...");
@@ -41,6 +40,50 @@ export async function main(event, context) {
   // --- Initialize Storage FIRST ---
   const storage = new Storage();
   let assetsBucket = storage.bucket(ASSETS_BUCKET_NAME);
+
+  // -- Load PDF
+  const templateFile = assetsBucket.file(
+    `templates/${BLANK_TEMPLATE_FILENAME}`
+  );
+  const koreanFontFile = assetsBucket.file(`fonts/${KOREAN_FONT_FILENAME}`);
+
+  // 3. Download both files concurrently for efficiency
+  // Use Promise.all to wait for both downloads to complete at once
+  const [templateDownloadResult, koreanFontDownloadResult] = await Promise.all([
+    templateFile.download(),
+    koreanFontFile.download(),
+  ]);
+
+  const [templateBuffer] = templateDownloadResult;
+  console.log("Template PDF downloaded from Cloud Storage.");
+
+  const [koreanFontBuffer] = koreanFontDownloadResult;
+  console.log("Korean font downloaded from Cloud Storage.");
+
+  const existingPdfBytes = templateBuffer;
+  const tkdForm = await PDFDocument.load(existingPdfBytes, {
+    // You might need to disable strict parsing if your compressed PDF has minor issues
+    // ignoreEncryption: true,
+    // throwOnInvalidObject: false,
+  });
+
+  // 5. Register fontkit and embed the Korean font
+  tkdForm.registerFontkit(fontkit);
+  const koreanFont = await tkdForm.embedFont(koreanFontBuffer, {
+    family: "Noto Serif KR", // A descriptive name for your font
+    // subsets: [0, 1] // Optional: if you only need certain Unicode ranges for smaller size
+  });
+  let latinFont = await tkdForm.embedFont(StandardFonts.TimesRoman, {
+    subset: true,
+  });
+
+  // Example: Get the first page of the template
+  const pages = tkdForm.getPages();
+  const firstPage = pages[0];
+  console.log(`Template has ${pages.length} page(s).`);
+  console.log("Korean font embedded into PDFDocument.");
+  console.log("Latin font embedded into PDFDocument.");
+  console.log("Template PDF loaded into PDFDocument.");
 
   let inputCsvContent;
   let testCount;
@@ -68,6 +111,7 @@ export async function main(event, context) {
 
     // --- Download the Google Sheet (CSV) Content from Drive ---
     console.log(`Downloading CSV content for file ID: ${fileId}`);
+    // this try block will determine if we go down local or cloud function trigger
     try {
       const res = await drive.files.export(
         {
@@ -95,7 +139,13 @@ export async function main(event, context) {
           fileId: fileId,
           fields: "name",
         });
-        if (fileMetadata.data.name) {
+        let fileName = fileMetadata.data.name;
+        if (fileName) {
+          const parts = fileName.replace(/\.csv$/i, "").split("_"); // Remove .csv extension and split by underscore
+          testCount = parts[0];
+          eventDate = `${String(Number(parts[1]))}/${String(
+            Number(parts[2])
+          )}/${parts[3]}`;
         }
       } catch (metaError) {
         console.warn(
@@ -111,7 +161,7 @@ export async function main(event, context) {
   } else {
     // Running locally, provide mock CSV content from a file in GCS
     console.warn("Running locally. Loading mock CSV from Cloud Storage.");
-    const mockFileName = "172_05_17_2025.csv"; // Name of your mock CSV file
+    const mockFileName = "172_05_17_2025.csv"; // maybe i could make this more dynamic for a fallback for local
     const mockCsvFile = assetsBucket.file(`mocks/${mockFileName}`); // Path within assets bucket
 
     try {
@@ -120,17 +170,39 @@ export async function main(event, context) {
       console.log(
         `Mock CSV "${mockFileName}" loaded successfully from Cloud Storage.`
       );
-      let splitMockName = mockFileName.split(".");
-      splitMockName.pop();
-      splitMockName = splitMockName.join("_").split("_");
-      testCount = splitMockName.shift();
-      eventDate = splitMockName.join("/");
+      const parts = mockFileName.replace(/\.csv$/i, "").split("_"); // Remove .csv extension and split by underscore
+      testCount = parts[0];
+      eventDate = `${String(Number(parts[1]))}/${String(Number(parts[2]))}/${
+        parts[3]
+      }`;
+
       outPutFilePath = path.join(
         ".",
         "data",
         "output_files",
         String(testCount)
       );
+
+      try {
+        await fs.access(outPutFilePath); // Check if directory exists
+        console.log(`Output directory already exists: ${outPutFilePath}`);
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          // 'ENOENT' means "Error No Entry" - the file/directory does not exist
+          console.log(
+            `Output directory does not exist. Creating: ${outPutFilePath}`
+          );
+          await fs.mkdir(outPutFilePath, { recursive: true }); // Create it, including parents
+          console.log(`Output directory created: ${outPutFilePath}`);
+        } else {
+          // Re-throw any other unexpected errors during directory access
+          console.error(
+            `Error checking or creating output directory ${outPutFilePath}:`,
+            error
+          );
+          throw error;
+        }
+      }
     } catch (mockError) {
       console.error(`Error loading mock CSV "${mockFileName}":`, mockError);
       throw new Error(
@@ -139,15 +211,82 @@ export async function main(event, context) {
     }
   }
 
+  // load studentMap
+  let studentNameMap = new Map();
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  });
+
+  const authClient = await auth.getClient();
+  const sheets = google.sheets({ version: "v4", auth: authClient });
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: SHEET_RANGE,
+  });
+
+  const values = response.data.values.slice(1);
+
+  if (values && values.length > 0) {
+    values.forEach((row) => {
+      if (row[0] && row[1]) {
+        studentNameMap.set(row[0].trim(), row[1].trim());
+      }
+    });
+    console.log(
+      `Successfully loaded ${studentNameMap.size} name mappings from Google Sheet.`
+    );
+  } else {
+    throw new Error("Failed to load students map. Check google sheet.");
+  }
+
   // Configurations should be loaded, student map should be loaded, testcount & event loaded
   // we should be able to loop over every student now
+  const updateNamesMap = [];
   for (let line of inputCsvContent.split("\n")) {
-    const [name, lildragonBelt, adultJrBelt, DOB, isJrOrAdult] =
-      line.split(",");
-
+    if (!line.trim() || line.startsWith("Name")) continue;
+    let [name, lildragonBelt, adultJrBelt, bDay, isJrOrAdult] = line.split(",");
+    name = name.trim(); // big edge case here with widly variable names.  right now we will just let this ride and let our user handle formatting but this could cost more iterations down the line.
+    const lilDragon = lildragonBelt ? true : false;
     const beltColor = lildragonBelt ? lildragonBelt : adultJrBelt;
-    // console.log("This is name", name);
-    console.log("This is beltcolor", beltColor);
+    let fullNameInKorean = studentNameMap.has(name) // if their name isn't available in Korean I can assume that they aren't in the sheet.
+      ? studentNameMap.get(name)
+      : "";
+
+    if (!fullNameInKorean) {
+      console.log(
+        `Name "${name.trim()}" not found in map. Calling Gemini for translation.`
+      );
+      fullNameInKorean = await convertLatinNameToKorean(name.trim()); // Await the Gemini call
+      if (fullNameInKorean) {
+        fullNameInKorean = fullNameInKorean.replace(/\n/g, "").trim(); // Use regex for all newlines and trim
+
+        const newEntryForSheet = {
+          englishName: name, // The original English name from CSV
+          koreanName: fullNameInKorean, // The translated Korean name from Gemini
+        };
+        updateNamesMap.push(newEntryForSheet);
+        console.log(`Gemini translated "${name}" to "${fullNameInKorean}".`);
+      }
+    }
+    const currStudent = new Student(
+      name,
+      bDay,
+      beltColor,
+      lilDragon,
+      fullNameInKorean,
+      eventDate
+    );
+
+    createStudentForm(
+      currStudent,
+      latinFont,
+      koreanFont,
+      tkdForm,
+      firstPage,
+      testCount,
+      eventDate
+    );
   }
 
   return;
