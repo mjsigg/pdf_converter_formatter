@@ -1,41 +1,106 @@
 import fs from "fs/promises";
-
 import path from "path";
-
-import { PDFDocument, rgb, StandardFonts, degrees } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { TKDForm } from "./models/TKDForm.js";
 import { Student } from "./models/Student.js";
+import { Storage } from "@google-cloud/storage";
 import { convertLatinNameToKorean } from "./services/GeminiService.js";
+import { google } from "googleapis";
+/*
+Example of event
+{
+  "bucket": "your-input-bucket",
+  "name": "testcount_05_25_2025.pdf", // This is the part we want!
+  "contentType": "application/pdf",
+  "timeCreated": "2025-05-25T19:30:00.000Z",
+  "updated": "2025-05-25T19:30:00.000Z",
+  // ... other properties
+}
+*/
+// --- Constants ---
+const OUTPUT_BUCKET_NAME = "tkd_output_pdf"; // Your actual output bucket
+const ASSETS_BUCKET_NAME = "tkd_assets"; // Your actual assets bucket
+const BLANK_TEMPLATE_FILENAME = "blank_template_compressed.pdf";
+const KOREAN_FONT_FILENAME = "NotoSerifKR-SemiBold.ttf";
 
-async function main() {
-  const sourceFilePath = "data/source/updated_min.pdf";
-  const BLANK_TEMPLATE_FILENAME = "blank_template_compressed.pdf";
+// Google Sheet Details for student_name_map
+const SPREADSHEET_ID = "1YRuZUPwIASP1U-N0CT7KtHaYEJ6v0lOYfiF0mc0FB_M";
+const SHEET_RANGE = "Sheet1!A:B"; // Adjust 'Sheet1' to your actual sheet tab name if different
 
-  const templateFolderPath = "data/template";
-  const templatefilesAndDirs = await fs.readdir(templateFolderPath);
-  const templateFilePath = path.join(
-    templateFolderPath,
-    BLANK_TEMPLATE_FILENAME
+export async function main(event, context) {
+  let inputFileName;
+  let inputBucketName;
+  const storage = new Storage();
+
+  console.log("Attemping to load blank template file and korean font");
+  const assetsBucket = storage.bucket(ASSETS_BUCKET_NAME);
+  const templateFile = assetsBucket.file(
+    `templates/${BLANK_TEMPLATE_FILENAME}`
   );
+  const koreanFontFile = assetsBucket.file(`fonts/${KOREAN_FONT_FILENAME}`);
 
-  let createTemplate = false;
+  // 3. Download both files concurrently for efficiency
+  const [templateDownloadResult, koreanFontDownloadResult] = await Promise.all([
+    templateFile.download(),
+    koreanFontFile.download(),
+  ]);
 
-  if (createTemplate || templatefilesAndDirs.length === 0) {
-    const templateFormatPath = "formatted_for_template/readyForEdit.pdf";
+  const [templateBuffer] = templateDownloadResult;
+  console.log("Template PDF downloaded from Cloud Storage.");
 
-    await createTemplateFile(sourceFilePath, templateFormatPath);
+  const [koreanFontBuffer] = koreanFontDownloadResult;
+  console.log("Korean font downloaded from Cloud Storage.");
+
+  // 4. Load the PDF document from the downloaded buffer
+  const existingPdfBytes = templateBuffer;
+  const pdfDoc = await PDFDocument.load(existingPdfBytes, {
+    // You might need to disable strict parsing if your compressed PDF has minor issues
+    // ignoreEncryption: true,
+    // throwOnInvalidObject: false,
+  });
+
+  // 5. Register fontkit and embed the Korean font
+  pdfDoc.registerFontkit(fontkit);
+  const koreanFont = await pdfDoc.embedFont(koreanFontBuffer, {
+    family: "Noto Serif KR", // A descriptive name for your font
+    // subsets: [0, 1] // Optional: if you only need certain Unicode ranges for smaller size
+  });
+  console.log("Korean font embedded into PDFDocument.");
+  // Example: Get the first page of the template
+  const pages = pdfDoc.getPages();
+  const firstPage = pages[0];
+  console.log(`Template has ${pages.length} page(s).`);
+
+  let studentNameMap = new Map();
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  });
+
+  const authClient = await auth.getClient();
+  const sheets = google.sheets({ version: "v4", auth: authClient });
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: SHEET_RANGE,
+  });
+
+  const values = response.data.values.slice(1);
+
+  if (values && values.length > 0) {
+    values.forEach((row) => {
+      if (row[0] && row[1]) {
+        studentNameMap.set(row[0].trim(), row[1].trim());
+      }
+    });
     console.log(
-      "Creating template.  Need to print and move to formatted_for_template after creation to prep for drawing."
+      `Successfully loaded ${studentNameMap.size} name mappings from Google Sheet.`
     );
-    return;
+  } else {
+    throw new Error("Failed to load students map.  Check google sheet.");
   }
 
-  if (!templatefilesAndDirs.includes(BLANK_TEMPLATE_FILENAME)) {
-    throw new Error(
-      `Expected '${BLANK_TEMPLATE_FILENAME}' in the template folder.`
-    );
-  }
+  return;
 
   const [testCount, jsonFilePath, latestTestDate] = await checkAndProcessData();
   const studentsJsonString = await fs.readFile(jsonFilePath, "utf8");
