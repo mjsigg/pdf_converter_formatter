@@ -395,7 +395,11 @@ export async function main(event, context) {
   return;
 }
 
-await main().catch(console.error);
+main().catch((error) => {
+  console.error("Application encountered an unhandled error:", error);
+  // Exit with a non-zero code to indicate script failure
+  process.exit(1);
+});
 
 // helpers
 async function createStudentForm(

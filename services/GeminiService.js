@@ -13,7 +13,7 @@ export async function convertLatinNameToKorean(latinName) {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash",
-      contents: `Convert the following name from latin into Korean ${latinName}. Ensure that the format is in Korean only.  Ensure that there are no newline characters returned back in the response.`,
+      contents: `Convert the following name from latin into Korean ${latinName}. Ensure that the format is in Korean only.  Ensure that you ONLY resond with the name in Korean.  Ensure that there are no newline characters returned back in the response.`,
     });
 
     if (response && response.text) {
