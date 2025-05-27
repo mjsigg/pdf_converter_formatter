@@ -12,6 +12,9 @@ import archiver from "archiver";
 import stream from "stream";
 import { promisify } from "util";
 import csv from "csv-parser";
+import "dotenv/config";
+import sgMail from "@sendgrid/mail";
+
 const pipeline = promisify(stream.pipeline);
 
 // --- Constants ---
@@ -21,7 +24,7 @@ const BLANK_TEMPLATE_FILENAME = "blank_template_compressed.pdf";
 const KOREAN_FONT_FILENAME = "NotoSerifKR-SemiBold.ttf";
 
 // Google Sheet Details for student_name_map
-const SPREADSHEET_ID = "1YRuZUPwIASP1U-N0CT7KtHaYEJ6v0lOYfiF0mc0FB_M";
+const SPREADSHEET_ID = process.env.NAME_MAP_SHEET_ID;
 const SHEET_RANGE = "Sheet1!A:B"; // A: EnglishName, B: KoreanName
 
 export async function main(event, context) {
@@ -321,10 +324,10 @@ export async function main(event, context) {
   }
   // Post Processing of PDFs
   console.log("All student forms processed.");
-
+  let batchZipSignedUrl;
   // zipper portion
   try {
-    const batchZipSignedUrl = await createAndUploadZip(
+    batchZipSignedUrl = await createAndUploadZip(
       allGeneratedPdfs,
       String(testCount) + "_" + eventDate,
       OUTPUT_BUCKET_NAME,
@@ -334,6 +337,29 @@ export async function main(event, context) {
   } catch (e) {
     console.error("Failed to create and upload batch zip: ", e);
   }
+
+  // using Twilio SendGrid's v3 Node.js Library
+  // https://github.com/sendgrid/sendgrid-nodejs
+  // send url via sendgrid
+
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  const msg = {
+    to: process.env.RECIPIENT_EMAIL,
+    from: "no-reply@tkdautomations.com", // Change to your verified sender
+    subject: `SignedURL for Test ${testCount}`,
+    text: "Download",
+    html: `<p>Hello there!</p>
+      <p>Please click on your form here: <span><a href=${batchZipSignedUrl}>${batchZipSignedUrl}</span></a></p>
+      <p>Link is valid for 24 hours from this message.</p>`,
+  };
+  sgMail
+    .send(msg)
+    .then(() => {
+      console.log("Email sent");
+    })
+    .catch((error) => {
+      console.error(error);
+    });
 
   // update studentNamesMap
   if (updateNamesMap.length === 0) return;
@@ -365,6 +391,7 @@ export async function main(event, context) {
     console.error("Error writing new names back to Google Sheet:", writeError);
   }
 
+  console.log("End of application...");
   return;
 }
 
