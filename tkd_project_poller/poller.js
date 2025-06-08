@@ -1,11 +1,9 @@
-// poller.js
 import { google } from "googleapis";
 import "dotenv/config";
 import fetch from "node-fetch";
 
 const SCOPES = ["https://www.googleapis.com/auth/drive.readonly"];
 const POLL_INTERVAL_SECONDS = 60;
-
 const isLocal = process.env.CREDENTIALS_PATH;
 
 const auth = new google.auth.GoogleAuth({
@@ -13,8 +11,6 @@ const auth = new google.auth.GoogleAuth({
   ...(isLocal && { keyFile: process.env.CREDENTIALS_PATH }),
 });
 
-// Remove SHARED_DRIVE_ID if you are only working with shared folders
-// const SHARED_DRIVE_ID = process.env.SHARED_DRIVE_ID;
 const SHARED_FOLDER_ID = process.env.SHARED_FOLDER_ID;
 const MAIN_FUNCTION_URL = isLocal
   ? process.env.LOCAL_URL
@@ -25,7 +21,6 @@ if (SHARED_FOLDER_ID) console.log("Shared folder ID found: ", SHARED_FOLDER_ID);
 
 export async function pollDrive() {
   console.log(`[${new Date().toISOString()}] Polling started...`);
-
   const authClient = await auth.getClient();
   const drive = google.drive({ version: "v3", auth: authClient });
   const baseQuery = `"${SHARED_FOLDER_ID}" in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`;
@@ -33,8 +28,6 @@ export async function pollDrive() {
   const timeQuery = !isLocal ? ` and modifiedTime > '${lastCheckedTime}'` : "";
 
   const query = baseQuery + timeQuery;
-
-  // const query = `"${SHARED_FOLDER_ID}" in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and modifiedTime > '${lastCheckedTime}' and trashed = false`;
 
   try {
     const folderInfo = await drive.files.get({
@@ -64,7 +57,6 @@ export async function pollDrive() {
       for (const file of newFiles) {
         console.log(`Exporting & triggering processor for: ${file.name}`);
 
-        // 1. Export Google Sheet as CSV
         const exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/csv`;
 
         const token = await authClient.getAccessToken();
@@ -84,7 +76,6 @@ export async function pollDrive() {
 
         const csvText = await csvRes.text();
 
-        // 2. Trigger your main processor with the CSV text
         await fetch(MAIN_FUNCTION_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
