@@ -3,8 +3,8 @@ import "dotenv/config";
 import fetch from "node-fetch";
 
 const SCOPES = ["https://www.googleapis.com/auth/drive.readonly"];
-const POLL_INTERVAL_SECONDS = 60;
 const isLocal = process.env.CREDENTIALS_PATH;
+const POLL_INTERVAL_SECONDS = isLocal ? 30 : 60;
 
 const auth = new google.auth.GoogleAuth({
   scopes: SCOPES,
