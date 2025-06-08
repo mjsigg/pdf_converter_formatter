@@ -1,6 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import {
+  PDFDocument,
+  RemovePageFromEmptyDocumentError,
+  StandardFonts,
+} from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { TKDForm } from "./models/TKDForm.js";
 import { Student } from "./models/Student.js";
@@ -14,7 +18,7 @@ import { promisify } from "util";
 import csv from "csv-parser";
 import "dotenv/config";
 import sgMail from "@sendgrid/mail";
-
+// NOTE: index.js on root will only be for local since cloud run functions run differently
 const pipeline = promisify(stream.pipeline);
 
 // --- Constants ---
@@ -27,11 +31,31 @@ const KOREAN_FONT_FILENAME = "NotoSerifKR-SemiBold.ttf";
 const SPREADSHEET_ID = process.env.NAME_MAP_SHEET_ID;
 const SHEET_RANGE = "Sheet1!A:B"; // A: EnglishName, B: KoreanName
 
-export async function main(event, context) {
+export async function main(eventMetaData) {
   console.log("Starting application ...");
 
+  console.log("Inside of event meta data", eventMetaData);
+
+  return;
+
+  const auth = new google.auth.GoogleAuth({
+    keyFile: process.env.CREDENTIALS_PATH,
+    scopes: [
+      "https://www.googleapis.com/auth/drive", // To read files from Google Drive
+      "https://www.googleapis.com/auth/spreadsheets", // Still needed for the name map sheet
+      "https://www.googleapis.com/auth/devstorage.read_write", // <-- ADD THIS FOR GCS!
+    ],
+  });
+  const authClient = await auth.getClient();
+
+  const drive = google.drive({ version: "v3", auth: authClient });
+  const sheets = google.sheets({ version: "v4", auth: authClient });
+
   // --- Initialize Storage FIRST ---
-  const storage = new Storage();
+  const storage = new Storage({
+    projectId: process.env.PROJECT_ID,
+    keyFilename: process.env.CREDENTIALS_PATH,
+  });
   let assetsBucket = storage.bucket(ASSETS_BUCKET_NAME);
 
   // -- Load PDF
@@ -61,16 +85,6 @@ export async function main(event, context) {
   // Determine if running as a Cloud Function (Google Drive event) or locally
   const fileId = event?.data?.fileId; // For Google Drive trigger
   const localEnv = fileId ? false : true;
-  const auth = new google.auth.GoogleAuth({
-    scopes: [
-      "https://www.googleapis.com/auth/drive", // To read files from Google Drive
-      "https://www.googleapis.com/auth/spreadsheets", // Still needed for the name map sheet
-      "https://www.googleapis.com/auth/devstorage.read_write", // <-- ADD THIS FOR GCS!
-    ],
-  });
-  const authClient = await auth.getClient();
-  const drive = google.drive({ version: "v3", auth: authClient });
-  const sheets = google.sheets({ version: "v4", auth: authClient });
 
   if (fileId) {
     // Running as a Cloud Function, triggered by Google Drive event
@@ -179,26 +193,29 @@ export async function main(event, context) {
   // load studentMap
   let studentNameMap = new Map();
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: SHEET_RANGE,
-  });
-
-  const values = response.data.values.slice(1);
-
-  if (values && values.length > 0) {
-    values.forEach((row) => {
-      if (row[0] && row[1]) {
-        studentNameMap.set(row[0].trim(), row[1].trim());
-      }
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: SHEET_RANGE,
     });
-    console.log(
-      `Successfully loaded ${studentNameMap.size} name mappings from Google Sheet.`
-    );
-  } else {
-    throw new Error("Failed to load students map. Check google sheet.");
-  }
 
+    const values = response.data.values.slice(1);
+
+    if (values && values.length > 0) {
+      values.forEach((row) => {
+        if (row[0] && row[1]) {
+          studentNameMap.set(row[0].trim(), row[1].trim());
+        }
+      });
+      console.log(
+        `Successfully loaded ${studentNameMap.size} name mappings from Google Sheet.`
+      );
+    } else {
+      throw new Error("Failed to load students map. Check google sheet.");
+    }
+  } catch (e) {
+    console.log("Error in trying to access the spreadsheets call.  Error: ", e);
+  }
   // Configurations should be loaded, student map should be loaded, testcount & event loaded
   // we should be able to loop over every student now
 
@@ -342,7 +359,12 @@ export async function main(event, context) {
   // https://github.com/sendgrid/sendgrid-nodejs
   // send url via sendgrid
 
+  if (!batchZipSignedUrl) {
+    throw new Error("Failed to created a signed url. URL: ", batchZipSignedUrl);
+  }
+
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
   const msg = {
     to: process.env.RECIPIENT_EMAIL,
     from: "no-reply@tkdautomations.com", // Change to your verified sender
