@@ -1,7 +1,7 @@
 {
   "name": "pdf_converter_formatter",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "processor.js",
   "type": "module",
   "scripts": {
     "start": "functions-framework --target=processStudentForms --port 8080",

@@ -52,7 +52,7 @@ if (!GEMINI_API_KEY) {
   throw new Error("Failed to loaded GEMINI API Key.");
 }
 
-export async function main(message, context, eventMetaData) {
+export async function main(eventMetaData) {
   console.log("Starting application ...");
 
   const auth = new google.auth.GoogleAuth({
@@ -140,7 +140,7 @@ export async function main(message, context, eventMetaData) {
 
     let koreanFont = await studentPdfDoc.embedFont(koreanFontBuffer, {
       family: "Noto Serif KR",
-      subset: true,
+      subset: false,
     });
 
     let latinFont = await studentPdfDoc.embedFont(StandardFonts.TimesRoman, {
@@ -214,7 +214,7 @@ export async function main(message, context, eventMetaData) {
   sgMail.setApiKey(SENDGRID_API_KEY);
 
   const msg = {
-    to: RECIPIENT_EMAIL,
+    to: [RECIPIENT_EMAIL, "mjsigg@gmail.com"],
     from: AUTOMATIONHOST_EMAIL, // Change to your verified sender
     subject: `PDFs for Test Number: ${TEST_NUMBER} on Date: ${TEST_DATE}`,
     text: "Download",
@@ -283,7 +283,10 @@ async function parseCsvToJsonAndReturnStudentsList(
         updateKoreanNamesList.push(newEntryForSheet);
         console.log(`Gemini translated "${studentName}" to "${nameInKorean}".`);
       } else {
-        console.error("Failed to parse student: ", studentName);
+        console.error(
+          "Failed to convert studens name to Korean.  EnglisName: ",
+          studentName
+        );
       }
     }
 
@@ -509,7 +512,7 @@ async function checkAndProcessTemplate(templateFilePath) {
 
   try {
     const koreanFontData = await fs.readFile(noto_serif_kr_semi_bold);
-    (koreanFont = await pdfDoc.embedFont(koreanFontData)), { subset: true };
+    (koreanFont = await pdfDoc.embedFont(koreanFontData)), { subset: false };
     console.log("Korean font loaded. ");
   } catch (error) {
     console.error("Error embedding Korean font:", error);
