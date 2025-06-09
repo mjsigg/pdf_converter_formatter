@@ -72,12 +72,6 @@ export class Student {
       ? Student.lilDragonRanks[normalizedBeltColorKey]
       : Student.ranks[normalizedBeltColorKey];
 
-    // const parseTestDate = latestTestDate
-    //   .trim()
-    //   .split("_")
-    //   .map((val) => String(parseInt(val)))
-    //   .join("_");
-
     const [month, day, year] = latestTestDate;
 
     (this.lilDragon = lilDragon),

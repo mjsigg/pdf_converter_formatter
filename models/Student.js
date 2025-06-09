@@ -48,7 +48,7 @@ export class Student {
     if (bDayParts.length !== 3)
       throw new Error("Expected a format of MM/DD/YEAR");
 
-    const nameParts = name.split(" ");
+    const nameParts = name.trim().split(" ");
 
     if (nameParts.length < 2)
       throw new Error("Expect there to be at least a space in format.");
@@ -71,12 +71,6 @@ export class Student {
     const computeNumberDan = lilDragon
       ? Student.lilDragonRanks[normalizedBeltColorKey]
       : Student.ranks[normalizedBeltColorKey];
-
-    // const parseTestDate = latestTestDate
-    //   .trim()
-    //   .split("_")
-    //   .map((val) => String(parseInt(val)))
-    //   .join("_");
 
     const [month, day, year] = latestTestDate;
 
@@ -254,7 +248,7 @@ export class Student {
         () =>
           this.createTextOptions(
             year,
-            koreanFont,
+            latinFont,
             testDateXPos,
             testDateYPos,
             size
@@ -270,7 +264,7 @@ export class Student {
         () =>
           this.createTextOptions(
             month,
-            koreanFont,
+            latinFont,
             testDateXPos + 40,
             testDateYPos,
             size
@@ -286,7 +280,7 @@ export class Student {
         () =>
           this.createTextOptions(
             day,
-            koreanFont,
+            latinFont,
             testDateXPos + 50,
             testDateYPos,
             size

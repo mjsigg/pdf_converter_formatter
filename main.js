@@ -1,26 +1,16 @@
 import fs from "fs/promises";
 import path from "path";
-import {
-  PDFDocument,
-  RemovePageFromEmptyDocumentError,
-  StandardFonts,
-} from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { TKDForm } from "./models/TKDForm.js";
 import { Student } from "./models/Student.js";
 import { Storage } from "@google-cloud/storage";
-import { convertLatinNameToKorean } from "./services/GeminiService.js";
 import { google } from "googleapis";
 import archiver from "archiver";
+import { GoogleGenAI } from "@google/genai";
 // --- NEW IMPORTS FOR CSV HANDLING ---
-import stream from "stream";
-import { promisify } from "util";
-import csv from "csv-parser";
 import "dotenv/config";
 import sgMail from "@sendgrid/mail";
-// NOTE: index.js on root will only be for local since cloud run functions run differently
-const pipeline = promisify(stream.pipeline);
-
 // --- Constants ---
 const OUTPUT_BUCKET_NAME = "tkd_output_pdf"; // Your actual output bucket
 const ASSETS_BUCKET_NAME = "tkd_assets"; // Your actual assets bucket
@@ -28,34 +18,62 @@ const BLANK_TEMPLATE_FILENAME = "blank_template_compressed.pdf";
 const KOREAN_FONT_FILENAME = "NotoSerifKR-SemiBold.ttf";
 
 // Google Sheet Details for student_name_map
-const SPREADSHEET_ID = process.env.NAME_MAP_SHEET_ID;
-const SHEET_RANGE = "Sheet1!A:B"; // A: EnglishName, B: KoreanName
+const SHEET_RANGE = "Sheet1!A:B"; // A: EnglishName, B: KoreanNameq
 
-export async function main(eventMetaData) {
+const CREDENTIALS_PATH = process.env.CREDENTIALS_PATH; // only for local
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const PROJECT_ID = process.env.PROJECT_ID;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const RECIPIENT_EMAIL = process.env.RECIPIENT_EMAIL;
+const NAME_MAP_SHEET_ID = process.env.NAME_MAP_SHEET_ID;
+const AUTOMATIONHOST_EMAIL = process.env.AUTOMATION_HOST_EMAIL;
+
+const requiredEnvVariables = [
+  "GEMINI_API_KEY",
+  "PROJECT_ID",
+  "SENDGRID_API_KEY",
+  "RECIPIENT_EMAIL",
+  "NAME_MAP_SHEET_ID",
+  "AUTOMATION_HOST_EMAIL",
+];
+
+const env = {};
+
+for (const varName of requiredEnvVariables) {
+  if (!process.env[varName]) {
+    throw new Error(`Missing required environment variable: ${varName}`);
+  }
+  env[varName] = process.env[varName];
+}
+
+console.log("All environment variables loaded successfully!");
+
+if (!GEMINI_API_KEY) {
+  throw new Error("Failed to loaded GEMINI API Key.");
+}
+
+export async function main(message, context, eventMetaData) {
   console.log("Starting application ...");
 
-  console.log("Inside of event meta data", eventMetaData);
-
-  return;
-
   const auth = new google.auth.GoogleAuth({
-    keyFile: process.env.CREDENTIALS_PATH,
     scopes: [
       "https://www.googleapis.com/auth/drive", // To read files from Google Drive
       "https://www.googleapis.com/auth/spreadsheets", // Still needed for the name map sheet
       "https://www.googleapis.com/auth/devstorage.read_write", // <-- ADD THIS FOR GCS!
     ],
+    ...(CREDENTIALS_PATH && { keyFile: CREDENTIALS_PATH }), // Corrected conditional keyFile
   });
   const authClient = await auth.getClient();
 
   const drive = google.drive({ version: "v3", auth: authClient });
   const sheets = google.sheets({ version: "v4", auth: authClient });
-
   // --- Initialize Storage FIRST ---
+
   const storage = new Storage({
-    projectId: process.env.PROJECT_ID,
-    keyFilename: process.env.CREDENTIALS_PATH,
+    projectId: PROJECT_ID,
+    ...(CREDENTIALS_PATH && { keyFilename: CREDENTIALS_PATH }),
   });
+
   let assetsBucket = storage.bucket(ASSETS_BUCKET_NAME);
 
   // -- Load PDF
@@ -63,6 +81,18 @@ export async function main(eventMetaData) {
     `templates/${BLANK_TEMPLATE_FILENAME}`
   );
   const koreanFontFile = assetsBucket.file(`fonts/${KOREAN_FONT_FILENAME}`);
+  // metadata constants
+  const FILE_ID = eventMetaData.fileId;
+  const FILE_NAME = eventMetaData?.fileName?.includes(" copy")
+    ? eventMetaData.fileName.replace(" copy", "") // Removed '...' and added '' for replacement
+    : eventMetaData?.fileName || "172_06_08_2025";
+  let [extractTestNumber, month, day, year] = FILE_NAME.split("_");
+
+  const TEST_NUMBER = extractTestNumber;
+  const TEST_DATE = [month, day, year];
+  const CSV_DATA = eventMetaData.csvContent;
+  const [studentList, updateKoreanNamesList] =
+    await parseCsvToJsonAndReturnStudentsList(CSV_DATA, TEST_DATE, TEST_NUMBER);
 
   // 3. Download both files concurrently for efficiency
   // Use Promise.all to wait for both downloads to complete at once
@@ -70,195 +100,17 @@ export async function main(eventMetaData) {
     templateFile.download(),
     koreanFontFile.download(),
   ]);
-
   const [templateBuffer] = templateDownloadResult;
   console.log("Template PDF downloaded from Cloud Storage.");
 
   const [koreanFontBuffer] = koreanFontDownloadResult;
   console.log("Korean font downloaded from Cloud Storage.");
 
-  let inputCsvContent;
-  let testCount;
-  let eventDate;
-  let outPutFilePath;
-
-  // Determine if running as a Cloud Function (Google Drive event) or locally
-  const fileId = event?.data?.fileId; // For Google Drive trigger
-  const localEnv = fileId ? false : true;
-
-  if (fileId) {
-    // Running as a Cloud Function, triggered by Google Drive event
-    console.log(
-      `Cloud Function triggered by Google Drive file with ID: ${fileId}`
-    );
-
-    // --- Download the Google Sheet (CSV) Content from Drive ---
-    console.log(`Downloading CSV content for file ID: ${fileId}`);
-    // this try block will determine if we go down local or cloud function trigger
-    try {
-      const res = await drive.files.export(
-        {
-          fileId: fileId,
-          mimeType: "text/csv", // Request to export as CSV
-        },
-        {
-          responseType: "stream", // Get the response as a stream
-        }
-      );
-
-      const chunks = [];
-      await pipeline(res.data, async function* (source) {
-        for await (const chunk of source) {
-          chunks.push(chunk);
-          yield chunk;
-        }
-      });
-      inputCsvContent = Buffer.concat(chunks).toString("utf8");
-      console.log("CSV content downloaded successfully from Google Drive.");
-
-      // Attempt to get the original filename from Drive metadata for output naming
-      try {
-        const fileMetadata = await drive.files.get({
-          fileId: fileId,
-          fields: "name",
-        });
-        let fileName = fileMetadata.data.name;
-        if (fileName) {
-          const parts = fileName.replace(/\.csv$/i, "").split("_"); // Remove .csv extension and split by underscore
-          testCount = parts[0];
-          eventDate = [parts[1], parts[2], parts[3]];
-        }
-      } catch (metaError) {
-        console.warn(
-          `Could not retrieve original filename for fileId ${fileId}: ${metaError.message}. Using default output name.`
-        );
-      }
-    } catch (driveError) {
-      console.error("Error downloading CSV from Google Drive:", driveError);
-      throw new Error(
-        `Failed to download CSV from Drive: ${driveError.message}`
-      );
-    }
-  } else {
-    // Running locally, provide mock CSV content from a file in GCS
-    console.warn("Running locally. Loading mock CSV from Cloud Storage.");
-    const mockFileName = "172_05_17_2025.csv"; // maybe i could make this more dynamic for a fallback for local
-    const mockCsvFile = assetsBucket.file(`mocks/${mockFileName}`); // Path within assets bucket
-
-    try {
-      const [mockCsvBuffer] = await mockCsvFile.download();
-      inputCsvContent = mockCsvBuffer.toString("utf8");
-      console.log(
-        `Mock CSV "${mockFileName}" loaded successfully from Cloud Storage.`
-      );
-      const parts = mockFileName.replace(/\.csv$/i, "").split("_"); // Remove .csv extension and split by underscore
-      testCount = parts[0];
-      eventDate = eventDate = [parts[1], parts[2], parts[3]];
-
-      outPutFilePath = path.join(
-        ".",
-        "data",
-        "output_files",
-        String(testCount)
-      );
-
-      try {
-        await fs.access(outPutFilePath); // Check if directory exists
-        console.log(`Output directory already exists: ${outPutFilePath}`);
-      } catch (error) {
-        if (error.code === "ENOENT") {
-          // 'ENOENT' means "Error No Entry" - the file/directory does not exist
-          console.log(
-            `Output directory does not exist. Creating: ${outPutFilePath}`
-          );
-          await fs.mkdir(outPutFilePath, { recursive: true }); // Create it, including parents
-          console.log(`Output directory created: ${outPutFilePath}`);
-        } else {
-          // Re-throw any other unexpected errors during directory access
-          console.error(
-            `Error checking or creating output directory ${outPutFilePath}:`,
-            error
-          );
-          throw error;
-        }
-      }
-    } catch (mockError) {
-      console.error(`Error loading mock CSV "${mockFileName}":`, mockError);
-      throw new Error(
-        `Failed to load mock CSV for local testing: ${mockError.message}`
-      );
-    }
-  }
-
-  // load studentMap
-  let studentNameMap = new Map();
-
-  try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: SHEET_RANGE,
-    });
-
-    const values = response.data.values.slice(1);
-
-    if (values && values.length > 0) {
-      values.forEach((row) => {
-        if (row[0] && row[1]) {
-          studentNameMap.set(row[0].trim(), row[1].trim());
-        }
-      });
-      console.log(
-        `Successfully loaded ${studentNameMap.size} name mappings from Google Sheet.`
-      );
-    } else {
-      throw new Error("Failed to load students map. Check google sheet.");
-    }
-  } catch (e) {
-    console.log("Error in trying to access the spreadsheets call.  Error: ", e);
-  }
-  // Configurations should be loaded, student map should be loaded, testcount & event loaded
-  // we should be able to loop over every student now
-
   // start of processing PDFs
-  const updateNamesMap = [];
   const allGeneratedPdfs = [];
-  for (let line of inputCsvContent.split("\n")) {
-    if (!line.trim() || line.startsWith("Name")) continue;
-    let [name, lildragonBelt, adultJrBelt, bDay, isJrOrAdult] = line.split(",");
-    name = name.trim(); // big edge case here with widly variable names.  right now we will just let this ride and let our user handle formatting but this could cost more iterations down the line.
-    const lilDragon = lildragonBelt ? true : false;
-    const beltColor = lildragonBelt ? lildragonBelt : adultJrBelt;
-    let fullNameInKorean = studentNameMap.has(name) // if their name isn't available in Korean I can assume that they aren't in the sheet.
-      ? studentNameMap.get(name)
-      : "";
+  console.log("Entering processing students map");
 
-    if (!fullNameInKorean) {
-      console.log(
-        `Name "${name.trim()}" not found in map. Calling Gemini for translation.`
-      );
-      fullNameInKorean = await convertLatinNameToKorean(name.trim()); // Await the Gemini call
-      if (fullNameInKorean) {
-        fullNameInKorean = fullNameInKorean.replace(/\n/g, "").trim(); // Use regex for all newlines and trim
-
-        const newEntryForSheet = {
-          englishName: name, // The original English name from CSV
-          koreanName: fullNameInKorean, // The translated Korean name from Gemini
-        };
-        updateNamesMap.push(newEntryForSheet);
-        console.log(`Gemini translated "${name}" to "${fullNameInKorean}".`);
-      }
-    }
-
-    const currStudent = new Student(
-      name,
-      bDay,
-      beltColor,
-      lilDragon,
-      fullNameInKorean,
-      eventDate
-    );
-
-    // setting up pdf here
+  for (const student of studentList) {
     const existingPdfBytes = templateBuffer;
     const studentPdfDoc = await PDFDocument.load(existingPdfBytes, {
       // You might need to disable strict parsing if your compressed PDF has minor issues
@@ -272,7 +124,7 @@ export async function main(eventMetaData) {
     // TODO: tried setting the font characters to feed into the doc rather than loading all of it.
     // still not sure how to use it so we can reduce the amount of characters we inject into the document
     const allKoreanText = [
-      fullNameInKorean,
+      student.fullNameInKorean,
       Student.rankInKorean,
       Student.monthInKorean,
       Student.dayInKorean,
@@ -288,14 +140,13 @@ export async function main(eventMetaData) {
 
     let koreanFont = await studentPdfDoc.embedFont(koreanFontBuffer, {
       family: "Noto Serif KR",
-      subset: false,
+      subset: true,
     });
 
     let latinFont = await studentPdfDoc.embedFont(StandardFonts.TimesRoman, {
       subset: true,
     });
 
-    // Example: Get the first page of the template
     const tkdForm = new TKDForm(studentPdfDoc, studentFirstPage);
 
     console.log(`Template has ${studentPages.length} page(s).`);
@@ -304,49 +155,31 @@ export async function main(eventMetaData) {
     console.log("Template PDF loaded into PDFDocument.");
 
     createStudentForm(
-      currStudent,
+      student,
       latinFont,
       koreanFont,
       tkdForm,
       studentFirstPage,
-      testCount,
-      eventDate
+      TEST_NUMBER,
+      TEST_DATE
     );
 
-    const studentCertPath = path.join(
-      outPutFilePath,
-      currStudent.name + ".pdf"
-    );
-    console.log(
-      `Saving ${currStudent.name}'s certification to: `,
-      studentCertPath
-    );
-
-    /*
-    note: blocking off portion that was working for local printing as the fallback here.  this was before trying to implement zip portion.
-    
-    const pdfBytes = await studentPdfDoc.save();
-    allGeneratedPdfs.push({ fileName: studentCertPath, pdfBytes: pdfBytes });
-    console.log(`PDF generated and collected for: ${currStudent.name}`);
-    
-    if (localEnv) {
-      await fs.writeFile(studentCertPath, pdfBytes);
-    }
-    */
+    const studentFileName = student.name + ".pdf";
 
     //This portion is for saving to zip portion
     const uint8ArrayPdf = await studentPdfDoc.save();
     const pdfBytes = Buffer.from(uint8ArrayPdf);
-    allGeneratedPdfs.push({ fileName: studentCertPath, pdfBytes });
+    allGeneratedPdfs.push({ fileName: studentFileName, pdfBytes });
+    console.log("Finished processing ", student.name);
   }
-  // Post Processing of PDFs
+
   console.log("All student forms processed.");
-  let batchZipSignedUrl;
   // zipper portion
+  let batchZipSignedUrl;
   try {
     batchZipSignedUrl = await createAndUploadZip(
       allGeneratedPdfs,
-      String(testCount) + "_" + eventDate,
+      String(TEST_NUMBER) + "_" + TEST_DATE,
       OUTPUT_BUCKET_NAME,
       storage
     );
@@ -355,49 +188,15 @@ export async function main(eventMetaData) {
     console.error("Failed to create and upload batch zip: ", e);
   }
 
-  // using Twilio SendGrid's v3 Node.js Library
-  // https://github.com/sendgrid/sendgrid-nodejs
-  // send url via sendgrid
-
-  if (!batchZipSignedUrl) {
-    throw new Error("Failed to created a signed url. URL: ", batchZipSignedUrl);
-  }
-
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-
-  const msg = {
-    to: process.env.RECIPIENT_EMAIL,
-    from: "no-reply@tkdautomations.com", // Change to your verified sender
-    subject: `SignedURL for Test ${testCount}`,
-    text: "Download",
-    html: `<p>Hello there!</p>
-      <p>Please click on your form here: <span><a href=${batchZipSignedUrl}>${batchZipSignedUrl}</span></a></p>
-      <p>Link is valid for 24 hours from this message.</p>`,
-  };
-  sgMail
-    .send(msg)
-    .then(() => {
-      console.log("Email sent");
-    })
-    .catch((error) => {
-      console.error(error);
-    });
-
-  // update studentNamesMap
-  if (updateNamesMap.length === 0) return;
-  console.log("New names translated and collected:", updateNamesMap);
-  console.log(
-    `Appending ${updateNamesMap.length} new name mappings to Google Sheet.`
-  );
-
-  const valuesToAppend = updateNamesMap.map((entry) => [
+  // update names
+  const valuesToAppend = updateKoreanNamesList.map((entry) => [
     entry.englishName,
     entry.koreanName,
   ]);
 
   try {
     const appendResponse = await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
+      spreadsheetId: NAME_MAP_SHEET_ID,
       range: SHEET_RANGE, // Append to the end of the specified sheet and range
       valueInputOption: "RAW", // Treat input values as raw strings
       resource: {
@@ -412,18 +211,101 @@ export async function main(eventMetaData) {
   } catch (writeError) {
     console.error("Error writing new names back to Google Sheet:", writeError);
   }
+  sgMail.setApiKey(SENDGRID_API_KEY);
+
+  const msg = {
+    to: RECIPIENT_EMAIL,
+    from: AUTOMATIONHOST_EMAIL, // Change to your verified sender
+    subject: `PDFs for Test Number: ${TEST_NUMBER} on Date: ${TEST_DATE}`,
+    text: "Download",
+    html: `
+      <p>Please click on your form here: <span><a href=${batchZipSignedUrl}>Link for PDFs.</span></a></p>
+      <p>Link is valid for 24 hours from this message.</p>`,
+  };
+  sgMail
+    .send(msg)
+    .then(() => {
+      console.log("Email sent");
+    })
+    .catch((error) => {
+      console.error(error);
+    });
 
   console.log("End of application...");
   return;
 }
+if (CREDENTIALS_PATH) {
+  main();
+}
+// -------------------------------------------------------end of app main
+async function parseCsvToJsonAndReturnStudentsList(
+  csvString,
+  TEST_DATE,
+  TEST_NUMBER
+) {
+  const lines = csvString
+    .split(/\r?\n|\r/)
+    .filter((line) => line.trim() !== "");
 
-main().catch((error) => {
-  console.error("Application encountered an unhandled error:", error);
-  // Exit with a non-zero code to indicate script failure
-  process.exit(1);
-});
+  if (lines.length === 0) {
+    return []; // Return empty array if no data
+  }
+  // const headers = lines[0].replace("\r\n", "").split(","); // Get headers from the first line
+  const studentsList = [];
+  const updateKoreanNamesList = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(",");
 
-// helpers
+    let [
+      studentName,
+      lilDragonBelt,
+      jrAdultBelt,
+      DOB,
+      isJrOrAdult,
+      nameInKorean,
+    ] = values;
+
+    if (!nameInKorean) {
+      console.log(
+        `Name "${studentName.trim()}" not found in map. Calling Gemini for translation.`
+      );
+      nameInKorean = await convertLatinNameToKorean(
+        studentName.trim(),
+        GEMINI_API_KEY
+      ); // Await the Gemini call
+      if (nameInKorean) {
+        nameInKorean = nameInKorean.replace(/\n/g, "").trim(); // Use regex for all newlines and trim
+
+        const newEntryForSheet = {
+          englishName: studentName, // The original English name from CSV
+          koreanName: nameInKorean, // The translated Korean name from Gemini
+        };
+        updateKoreanNamesList.push(newEntryForSheet);
+        console.log(`Gemini translated "${studentName}" to "${nameInKorean}".`);
+      } else {
+        console.error("Failed to parse student: ", studentName);
+      }
+    }
+
+    const currentStudent = new Student(
+      studentName,
+      DOB,
+      lilDragonBelt ? lilDragonBelt : jrAdultBelt,
+      lilDragonBelt ? true : false,
+      nameInKorean,
+      TEST_DATE
+    );
+    studentsList.push(currentStudent);
+  }
+
+  console.log("Finished populating studentlist");
+  console.log(
+    "Number of studentNames to be updated: ",
+    updateKoreanNamesList.length
+  );
+  return [studentsList, updateKoreanNamesList];
+}
+
 async function createStudentForm(
   currStudent,
   latinFont,
@@ -572,7 +454,7 @@ async function createAndUploadZip(
           `Zip file "${zipFileName}" uploaded to ${OUTPUT_BUCKET_NAME}.`
         );
 
-        // 2. Generate a signed URL for the Zip file (expires in 15 minutes)
+        // 2. Generate a signed URL for the Zip file (expires in one day)
         const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000;
         const [signedUrl] = await file.getSignedUrl({
           version: "v4",
@@ -639,138 +521,6 @@ async function checkAndProcessTemplate(templateFilePath) {
   return [pdfDoc, latinFont, koreanFont];
 }
 
-async function processStudentData(
-  csvFilePath,
-  expectedJsonFilePath,
-  latestTestDate
-) {
-  try {
-    const fileContent = await fs.readFile(csvFilePath, "utf8");
-
-    console.log("Processing students data.", fileContent);
-    const lines = fileContent.trim().split("\n");
-
-    if (lines.length <= 1) {
-      console.log("CSV file is empty or has only headers.");
-      return;
-    }
-
-    const nameIdx = 0;
-    const littleDragonBeltIdx = 1;
-    const jrAdultBeltIdx = 2;
-    const DOBIdx = 3; // skip 4 at the moment
-    const fullNameInKoreanIdx = 5;
-
-    const currentStudentList = [];
-
-    for (let idx = 1; idx < lines.length; idx++) {
-      const currLine = lines[idx].split(",");
-      const currName = currLine[nameIdx]?.trim();
-
-      if (currName) {
-        const capitalizedName = currName
-          .split(" ")
-          .map((name) => name[0].toUpperCase() + name.slice(1))
-          .join(" ");
-
-        let currBelt =
-          (littleDragonBeltIdx !== -1 &&
-            currLine[littleDragonBeltIdx]?.trim()) ||
-          (jrAdultBeltIdx !== -1 && currLine[jrAdultBeltIdx]?.trim());
-
-        if (currBelt) {
-          const splitBelt = currBelt
-            .split(" ")
-            .map(
-              (word) =>
-                word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-            );
-          currBelt = splitBelt.join(" ");
-        }
-
-        const isLilDragon = currLine[littleDragonBeltIdx] ? true : false;
-        const currDOB = DOBIdx !== -1 ? currLine[DOBIdx]?.trim() : undefined;
-
-        const currStudent = {
-          name: capitalizedName,
-          birthDay: currDOB,
-          beltColor: currBelt,
-          lilDragon: isLilDragon,
-          fullNameInKorean: currLine[fullNameInKoreanIdx].trim(),
-          latestTestDate: latestTestDate,
-        };
-
-        currentStudentList.push(currStudent);
-      }
-    }
-
-    const jsonData = JSON.stringify(currentStudentList, null, 2);
-    await fs.writeFile(expectedJsonFilePath, jsonData, "utf8");
-    console.log(`Updated JSON data written to ${expectedJsonFilePath}`);
-
-    return currentStudentList;
-  } catch (e) {
-    console.error("Error processing student data:", e);
-    return null;
-  }
-}
-
-async function checkDirectoryExists(directoryPath) {
-  try {
-    await fs.access(directoryPath); // Check if the path exists
-    const stats = await fs.stat(directoryPath); // Get file/directory stats
-    return stats.isDirectory(); // Check if it's a directory
-  } catch (error) {
-    return false; // Path doesn't exist or other error
-  }
-}
-
-async function checkAndProcessData() {
-  const studentDataBasePath = "data/student_data";
-
-  try {
-    const studentDataFolder = await fs.readdir(studentDataBasePath);
-    const latestTestCount = studentDataFolder
-      .filter((folder) => !isNaN(Number(folder)))
-      .sort((a, b) => Number(b) - Number(a))[0];
-
-    console.log("Latest test count: ", latestTestCount);
-
-    const latestTestCountPath = path.join(studentDataBasePath, latestTestCount);
-
-    const latestCsvFileName = (await fs.readdir(latestTestCountPath)).filter(
-      (file) => file.includes(".csv")
-    )[0];
-
-    const latestTestDate = latestCsvFileName.split(".csv")[0];
-
-    console.log(
-      "This is latest test date in check and process data",
-      latestTestDate
-    );
-    const latestCsvFilePath = path.join(latestTestCountPath, latestCsvFileName);
-    const expectedLatestJsonFileName = `test_${latestTestCount}.json`;
-    const expectedJsonFilePath = path.join(
-      latestTestCountPath,
-      expectedLatestJsonFileName
-    );
-
-    console.log("This is latestTestCountPath: ", latestTestCountPath);
-    if (!latestTestCountPath.includes(expectedLatestJsonFileName)) {
-      console.log("Creating new json file.");
-      await processStudentData(
-        latestCsvFilePath,
-        expectedJsonFilePath,
-        latestTestDate
-      ); // Use full paths
-    }
-
-    return [latestTestCount, expectedJsonFilePath, latestTestDate];
-  } catch (e) {
-    console.error("Error in checkAndProcessData:", e);
-  }
-}
-
 async function createTemplateFile(sourceFilePath, savePath) {
   console.log("Creating template file...");
   const existingPdfBytes = await fs.readFile(sourceFilePath);
@@ -790,4 +540,27 @@ async function createTemplateFile(sourceFilePath, savePath) {
     sourceFilePath.slice("data/source/".length);
   await fs.writeFile(pathToFormattedFolder, pdfBytes);
   console.log("Successfully created template form to: ", pathToFormattedFolder);
+}
+
+export async function convertLatinNameToKorean(latinName, GEMINI_API_KEY) {
+  try {
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: `Convert the following name from latin into Korean ${latinName}. Ensure that the format is in Korean only.  Ensure that you ONLY resond with the name in Korean.  Ensure that there are no newline characters returned back in the response.`,
+    });
+
+    if (response && response.text) {
+      return response.text;
+    } else {
+      throw new Error(
+        `Gemini conversion failed for "${latinName}": No text response received.`
+      );
+    }
+  } catch (error) {
+    console.error(`Gemini conversion error for "${latinName}":`, error);
+    throw new Error(
+      `Gemini conversion failed for "${latinName}": ${error.message}`
+    );
+  }
 }
